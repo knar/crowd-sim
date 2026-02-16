@@ -1,0 +1,6 @@
+[ ] click to place wall, and draw rounded corner
+[ ] pathing..
+[ ] gui config sliders
+    [ ] interpolation toggle
+    [ ] time_step slider
+    [ ] arrow debugging toggle
