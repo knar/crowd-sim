@@ -1,33 +1,26 @@
+mod meshchunks;
+mod tilemap;
 mod world;
 
 use std::ops::{Add, Mul, Sub};
+use std::sync::LazyLock;
 
+use nannou::color::{Rgb, rgb_u32, rgba8};
 use nannou::prelude::*;
 use nannou_egui::{
     Egui,
     egui::{self, Slider},
 };
+
 use slotmap::DefaultKey;
 
 use crate::world::{DebugThing, Task, World};
 
-const INITIAL_ZOOM: f32 = 100.0;
-
-mod theme {
-    use nannou::color::{Rgb, Rgba, rgb_u32, rgba8};
-
-    pub fn bg() -> Rgb<u8> {
-        rgb_u32(0x363652)
-    }
-
-    pub fn fg() -> Rgb<u8> {
-        rgb_u32(0xe7dfdb)
-    }
-
-    pub fn grid() -> Rgba<u8> {
-        rgba8(0xe7, 0xdf, 0xdb, 0x11)
-    }
-}
+static BACKGROUND_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0x101010));
+static GROUND_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0x363652));
+static WALL_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0x545480));
+static WALL_BORDER_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0x7979a7));
+static FOREGROUND_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0xe7dfdb));
 
 fn main() {
     nannou::app(model).event(event).run();
@@ -35,30 +28,37 @@ fn main() {
 
 struct Model {
     egui: Egui,
+    client: Client,
     settings: Settings,
-    accumulator: f32,
     world: World,
-    selection: Vec<DefaultKey>,
-    camera: Camera,
-    mouse_position: Option<Vec2>,
-    drag_start: Option<Vec2>,
 }
 
 impl Model {
     fn mouse_world_pos(&self) -> Option<Vec2> {
-        self.mouse_position.map(|m| self.camera.screen_to_world(m))
+        self.client
+            .mouse_position
+            .map(|m| self.client.camera.screen_to_world(m))
     }
 
     fn reset_world(&mut self) {
-        self.selection.clear();
+        self.client.selection.clear();
         self.world.bots.clear();
         self.world.debug_things.clear();
 
-        for (x, y) in [(-2.5, -2.0), (-3.0, 0.0), (-2.0, 3.0)] {
-            self.world
-                .add_bot(vec2(x, y), Vec2::ZERO, Some(Task::Move(vec2(2.5, 0.0))));
-        }
+        // for (x, y) in [(-3.5, -2.0), (-3.0, 0.0), (-2.0, 3.0)] {
+        //     self.world
+        //         .add_bot(vec2(x, y), Vec2::ZERO, Some(Task::Move(vec2(5.5, 4.1))));
+        // }
     }
+}
+
+struct Client {
+    accumulator: f32,
+    camera: Camera,
+    drag_start: Option<Vec2>,
+    mouse_position: Option<Vec2>,
+    selection: Vec<DefaultKey>,
+    edit_walls_mode: bool,
 }
 
 struct Camera {
@@ -83,6 +83,7 @@ struct Settings {
     spring_distance: f32,
     timescale: f32,
     interpolate_frames: bool,
+    draw_head_dot: bool,
     draw_debug_lines: bool,
     draw_trail: bool,
     paused: bool,
@@ -99,30 +100,39 @@ fn model(app: &App) -> Model {
     let window = app.window(window_id).unwrap();
     let egui = Egui::from_window(&window);
 
-    let mut model = Model {
-        settings: Settings {
-            timestep: 0.1,
-            stopping_time: 0.15,
-            spring_constant: 16.0,
-            spring_distance: 0.2,
-            timescale: 1.0,
-            interpolate_frames: true,
-            draw_debug_lines: false,
-            draw_trail: false,
-            paused: false,
-        },
-        egui,
+    let world_size = ivec2(240, 160);
+
+    let settings = Settings {
+        timestep: 0.05,
+        stopping_time: 0.15,
+        spring_constant: 16.0,
+        spring_distance: 0.2,
+        timescale: 1.0,
+        interpolate_frames: true,
+        draw_head_dot: true,
+        draw_debug_lines: true,
+        draw_trail: false,
+        paused: false,
+    };
+
+    let client = Client {
         accumulator: 0.0,
-        world: World::new(),
         selection: Vec::new(),
         mouse_position: None,
         drag_start: None,
         camera: Camera {
             position: Vec2::ZERO,
-            zoom: INITIAL_ZOOM * vec2(1.0, 1.0),
+            zoom: Vec2::splat(32.0),
         },
+        edit_walls_mode: false,
     };
 
+    let mut model = Model {
+        egui,
+        settings,
+        client,
+        world: World::new(world_size),
+    };
     model.reset_world();
 
     model
@@ -137,47 +147,16 @@ fn event(app: &App, model: &mut Model, event: Event) {
     match event {
         Event::Update(update) => {
             if !model.settings.paused {
-                model.accumulator += update.since_last.as_secs_f32() * model.settings.timescale;
+                model.client.accumulator +=
+                    update.since_last.as_secs_f32() * model.settings.timescale;
             }
-            while model.accumulator >= model.settings.timestep {
-                model.accumulator -= model.settings.timestep;
+            while model.client.accumulator >= model.settings.timestep {
+                model.client.accumulator -= model.settings.timestep;
                 model.world.tick(&model.settings);
             }
 
             model.egui.set_elapsed_time(update.since_start);
-            let ctx = model.egui.begin_frame();
-            egui::Window::new("Settings")
-                .default_pos((20.0, 20.0))
-                .show(&ctx, |ui| {
-                    ui.add(Slider::new(&mut model.settings.timestep, 0.01..=1.0).text("Timestep"));
-                    ui.add(
-                        Slider::new(&mut model.settings.stopping_time, 0.01..=0.5)
-                            .text("Stopping time"),
-                    );
-                    ui.add(
-                        Slider::new(&mut model.settings.spring_constant, 0.01..=50.0)
-                            .text("Spring constant"),
-                    );
-                    ui.add(
-                        Slider::new(&mut model.settings.spring_distance, 0.01..=0.5)
-                            .text("Spring distance"),
-                    );
-                    ui.add(
-                        Slider::new(&mut model.settings.timescale, 0.01..=5.0).text("Timescale"),
-                    );
-                    ui.checkbox(&mut model.settings.interpolate_frames, "Interpolate frames");
-                    // ui.checkbox(&mut model.settings.draw_debug_lines, "Draw debug lines");
-                    ui.checkbox(&mut model.settings.draw_trail, "Draw trail");
-                    ui.checkbox(&mut model.settings.paused, "Pause");
-                    if model.settings.paused && ui.button("Tick").clicked() {
-                        model.world.tick(&model.settings);
-                    }
-
-                    if !model.selection.is_empty() {
-                        let bot = &model.world.bots[model.selection[0]];
-                        ui.label(bot.summary());
-                    }
-                });
+            settings_window(model);
         }
         Event::WindowEvent {
             simple: Some(event),
@@ -191,6 +170,40 @@ fn event(app: &App, model: &mut Model, event: Event) {
         }
         _ => {}
     }
+}
+
+fn settings_window(model: &mut Model) {
+    let ctx = model.egui.begin_frame();
+    egui::Window::new("Settings")
+        .default_pos((20.0, 20.0))
+        .show(&ctx, |ui| {
+            ui.add(Slider::new(&mut model.settings.timestep, 0.01..=1.0).text("Timestep"));
+            ui.add(
+                Slider::new(&mut model.settings.stopping_time, 0.01..=0.5).text("Stopping time"),
+            );
+            ui.add(
+                Slider::new(&mut model.settings.spring_constant, 0.01..=50.0)
+                    .text("Spring constant"),
+            );
+            ui.add(
+                Slider::new(&mut model.settings.spring_distance, 0.01..=0.5)
+                    .text("Spring distance"),
+            );
+            ui.add(Slider::new(&mut model.settings.timescale, 0.01..=5.0).text("Timescale"));
+            ui.checkbox(&mut model.settings.interpolate_frames, "Interpolate frames");
+            ui.checkbox(&mut model.settings.draw_head_dot, "Draw head dot");
+            ui.checkbox(&mut model.settings.draw_debug_lines, "Draw debug lines");
+            ui.checkbox(&mut model.settings.draw_trail, "Draw trail");
+            ui.checkbox(&mut model.settings.paused, "Pause");
+            if model.settings.paused && ui.button("Tick").clicked() {
+                model.world.tick(&model.settings);
+            }
+
+            if !model.client.selection.is_empty() {
+                let bot = &model.world.bots[model.client.selection[0]];
+                ui.label(bot.summary());
+            }
+        });
 }
 
 fn handle_sim_event(app: &App, model: &mut Model, event: WindowEvent) {
@@ -213,78 +226,138 @@ fn handle_sim_event(app: &App, model: &mut Model, event: WindowEvent) {
             Key::D => {
                 model.settings.draw_debug_lines = !model.settings.draw_debug_lines;
             }
+            Key::M => {
+                model.client.edit_walls_mode = !model.client.edit_walls_mode;
+            }
             _ => {}
         },
-        WindowEvent::MousePressed(btn) => match btn {
-            MouseButton::Left => {
-                model.drag_start = model.mouse_world_pos();
-            }
-            MouseButton::Right => {
-                if let Some(pos) = model.mouse_world_pos() {
-                    for &k in &model.selection {
-                        let task = Task::Move(pos);
-                        if app.keys.mods.shift() {
-                            model.world.add_bot_task(k, task);
-                        } else {
-                            model.world.set_bot_task(k, task);
+        WindowEvent::MousePressed(btn) => {
+            if !model.client.edit_walls_mode {
+                match btn {
+                    MouseButton::Left => {
+                        model.client.drag_start = model.mouse_world_pos();
+                    }
+                    MouseButton::Right => {
+                        if let Some(pos) = model.mouse_world_pos() {
+                            for &k in &model.client.selection {
+                                let task = Task::Move(pos);
+                                if app.keys.mods.shift() {
+                                    model.world.add_bot_task(k, task);
+                                } else {
+                                    model.world.set_bot_task(k, task);
+                                }
+                            }
                         }
                     }
+                    _ => {}
+                }
+            } else if let Some(pos) = model.mouse_world_pos()
+                && pos == pos.clamp(-model.world.half_size, model.world.half_size)
+            {
+                match btn {
+                    MouseButton::Left => {
+                        model.world.set_wall(pos, true);
+                        model.world.mesh_chunks.update(&model.world.tilemap);
+                    }
+                    MouseButton::Right => {
+                        model.world.set_wall(pos, false);
+                        model.world.mesh_chunks.update(&model.world.tilemap);
+                    }
+                    _ => {}
                 }
             }
-            _ => {}
-        },
+        }
         WindowEvent::MouseReleased(MouseButton::Left) => {
-            if let (Some(start), Some(end)) = (model.drag_start, model.mouse_world_pos()) {
-                let frac = model.accumulator / model.settings.timestep;
-                model.selection = model.world.bots_in_rect(start, end, frac);
-                model.drag_start = None;
+            if let (Some(start), Some(end)) = (model.client.drag_start, model.mouse_world_pos()) {
+                let frac = model.client.accumulator / model.settings.timestep;
+                let rect_center = start + (end - start) / 2.0;
+                let rect_size = (start - end).abs();
+                model.client.selection = model
+                    .world
+                    .bots
+                    .keys()
+                    .filter(|&k| {
+                        let bot = &model.world.bots[k];
+                        let pos = lerp(bot.prev_pos(), bot.position, frac);
+                        circle_rect_intersects(pos, bot.radius, rect_center, rect_size)
+                    })
+                    .collect();
+                model.client.drag_start = None;
             }
         }
         WindowEvent::MouseMoved(pos) => {
+            // drag-pan
             if app.mouse.buttons.middle().is_down()
-                && let Some(last) = model.mouse_position
+                && let Some(last) = model.client.mouse_position
             {
                 let d = pos - last;
-                model.camera.position -= d / model.camera.zoom;
+                model.client.camera.position -= d / model.client.camera.zoom;
             }
 
-            model.mouse_position = Some(pos);
+            model.client.mouse_position = Some(pos);
+
+            // edit walls
+            if model.client.edit_walls_mode
+                && let Some(pos) = model.mouse_world_pos()
+                && pos == pos.clamp(-model.world.half_size, model.world.half_size)
+            {
+                if app.mouse.buttons.left().is_down() {
+                    model.world.set_wall(pos, true);
+                    model.world.mesh_chunks.update(&model.world.tilemap);
+                } else if app.mouse.buttons.right().is_down() {
+                    model.world.set_wall(pos, false);
+                    model.world.mesh_chunks.update(&model.world.tilemap);
+                }
+            }
         }
-        WindowEvent::MouseExited => model.mouse_position = None,
+        WindowEvent::MouseExited => model.client.mouse_position = None,
         WindowEvent::MouseWheel(delta, _) => {
             let y = match delta {
                 MouseScrollDelta::LineDelta(_, lines) => lines * 10.0,
                 MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
             };
             let prev_pos = model.mouse_world_pos().unwrap();
-            model.camera.zoom *= (y / 100.0).exp2();
+            model.client.camera.zoom *= (y / 100.0).exp2();
             let new_pos = model.mouse_world_pos().unwrap();
-            model.camera.position += prev_pos - new_pos;
+            model.client.camera.position += prev_pos - new_pos;
         }
         _ => {}
     }
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
+    let cam = &model.client.camera;
+    let settings = &model.settings;
+    let world = &model.world;
+
     let draw = app.draw();
 
-    draw.background().color(theme::bg());
+    draw.background().color(*BACKGROUND_COLOR);
 
     let wdraw = draw
-        .scale_x(model.camera.zoom.x)
-        .scale_y(model.camera.zoom.y)
-        .translate(-vec3(model.camera.position.x, model.camera.position.y, 0.0));
+        .scale_x(cam.zoom.x)
+        .scale_y(cam.zoom.y)
+        .translate(-vec3(cam.position.x, cam.position.y, 0.0));
+
+    wdraw
+        .rect()
+        .x_y(0.0, 0.0)
+        .wh(world.half_size * 2.0)
+        .color(*GROUND_COLOR);
 
     // grid dots
-    if model.camera.zoom.abs().min_element() > 40.0 {
-        let half_win_size = (app.window_rect().wh() / 2.0).ceil();
-        let min = model.camera.screen_to_world(-half_win_size).floor();
-        let max = model.camera.screen_to_world(half_win_size).ceil() + Vec2::ONE;
+    let half_win_size = (app.window_rect().wh() / 2.0).ceil();
+    let view_min = cam.screen_to_world(-half_win_size);
+    let view_max = cam.screen_to_world(half_win_size);
+    if cam.zoom.abs().min_element() > 30.0 {
         let size = 0.05;
-        // let color = rgba(1.0, 1.0, 1.0, 0.03);
-        let color = theme::grid();
-        for x in min.x as i32..max.x as i32 {
-            for y in min.y as i32..max.y as i32 {
+        let color = rgba(1.0, 1.0, 1.0, 0.03);
+        let min_x = view_min.x.max(-world.half_size.x).floor() as i32;
+        let max_x = view_max.x.min(world.half_size.x).ceil() as i32;
+        let min_y = view_min.y.max(-world.half_size.y).floor() as i32;
+        let max_y = view_max.y.min(world.half_size.y).ceil() as i32;
+        for x in min_x..=max_x {
+            for y in min_y..=max_y {
                 wdraw
                     .rect()
                     .x_y(x as f32, y as f32)
@@ -294,18 +367,67 @@ fn view(app: &App, model: &Model, frame: Frame) {
         }
     }
 
+    // walls
+    let view_center = cam.position;
+    let view_size = view_max - view_min;
+    model.world.mesh_chunks.draw(&wdraw, view_center, view_size);
+
     // bots
-    for (k, bot) in &model.world.bots {
-        bot.draw(
-            &wdraw,
-            model.accumulator,
-            &model.settings,
-            model.selection.contains(&k),
-        );
+    let frac = model.client.accumulator / settings.timestep;
+    for (k, bot) in &world.bots {
+        let pos = if !settings.paused && settings.interpolate_frames {
+            lerp(bot.prev_pos(), bot.position, frac)
+        } else {
+            bot.position
+        };
+
+        if model.settings.draw_trail {
+            for &p in &bot.trail {
+                wdraw
+                    .ellipse()
+                    .xy(p)
+                    .radius(bot.radius * 0.2)
+                    .resolution(16.0)
+                    .color(rgba8(0xe7, 0xdf, 0xdb, 0x20));
+            }
+        }
+
+        // the circle!
+        wdraw
+            .ellipse()
+            .xy(pos)
+            .radius(bot.radius - 0.02)
+            .resolution(64.0)
+            .stroke(*FOREGROUND_COLOR)
+            .stroke_weight(0.04)
+            .no_fill();
+
+        if model.settings.draw_head_dot {
+            let prev_vel = (bot.prev_pos() - bot.prev_prev_pos()) / model.settings.timestep;
+            let lean = lerp(prev_vel, bot.velocity, frac) / bot.max_speed;
+
+            wdraw
+                .ellipse()
+                .xy(pos + lean * bot.radius * 0.6)
+                .radius(bot.radius * 0.4)
+                .resolution(64.0)
+                .color(*FOREGROUND_COLOR);
+        }
+
+        if model.client.selection.contains(&k) {
+            wdraw
+                .ellipse()
+                .xy(pos)
+                .radius(bot.radius)
+                .resolution(64.0)
+                .stroke(rgba(0.4, 0.8, 0.4, 1.0))
+                .stroke_weight(0.03)
+                .no_fill();
+        }
     }
 
     // selection box
-    if let (Some(start), Some(end)) = (model.drag_start, model.mouse_world_pos()) {
+    if let (Some(start), Some(end)) = (model.client.drag_start, model.mouse_world_pos()) {
         wdraw
             .rect()
             .xy(start + (end - start) / 2.0)
@@ -322,17 +444,21 @@ fn view(app: &App, model: &Model, frame: Frame) {
                 DebugThing::Vec(p, v) => {
                     draw_arrow(&wdraw, p, p + v, 0.03, color);
                 }
+                DebugThing::Arrow(a, b) => {
+                    draw_arrow(&wdraw, a, b, 0.03, color);
+                }
             }
         }
     }
 
     // mouse debug info
-    if let Some(pos) = model.mouse_position {
+    if let Some(pos) = model.client.mouse_position {
         let world = model.mouse_world_pos().unwrap();
         let win = app.window_rect().wh();
+        let tile = model.world.tilemap.coord(world);
         let mouse_info = format!(
-            "screen: {}, {}  world: {}, {}  win: {}, {}",
-            pos.x, pos.y, world.x, world.y, win.x, win.y
+            "world: {}, {} | tile: {}, {} | screen: {}, {} | win: {}, {}",
+            world.x, world.y, tile.x, tile.y, pos.x, pos.y, win.x, win.y
         );
         draw.text(&mouse_info)
             .color(WHITE)
@@ -342,8 +468,16 @@ fn view(app: &App, model: &Model, frame: Frame) {
             .left_justify();
     }
 
-    draw.to_frame(app, &frame).unwrap();
+    if model.client.edit_walls_mode {
+        draw.text("edit walls mode")
+            .color(WHITE)
+            .font_size(12)
+            .wh(app.main_window().rect().pad(4.0).wh())
+            .align_text_bottom()
+            .right_justify();
+    }
 
+    draw.to_frame(app, &frame).unwrap();
     // draw egui ontop of everything else
     model.egui.draw_to_frame(&frame).unwrap();
 }
@@ -379,4 +513,37 @@ where
     T: Copy + Add<Output = T> + Sub<Output = T> + Mul<f32, Output = T>,
 {
     start + (end - start) * factor
+}
+
+fn circle_rect_intersects(
+    circle_center: Vec2,
+    circle_radius: f32,
+    rect_center: Vec2,
+    rect_size: Vec2,
+) -> bool {
+    let half_size = rect_size / 2.0;
+    let d = (circle_center - rect_center).abs();
+    if d.x > half_size.x + circle_radius || d.y > half_size.y + circle_radius {
+        return false;
+    }
+    if d.x < half_size.x || d.y < half_size.y {
+        return true;
+    }
+    let corner_dist_sq = d.distance_squared(half_size);
+    corner_dist_sq <= circle_radius * circle_radius
+}
+
+pub fn axis_aligned_rect_rect_intersects(
+    a_center: Vec2,
+    a_size: Vec2,
+    b_center: Vec2,
+    b_size: Vec2,
+) -> bool {
+    let a_halfsize = a_size / 2.0;
+    let b_halfsize = b_size / 2.0;
+    let a_min = a_center - a_halfsize;
+    let a_max = a_center + a_halfsize;
+    let b_min = b_center - b_halfsize;
+    let b_max = b_center + b_halfsize;
+    a_min.x.max(b_min.x) < a_max.x.min(b_max.x) && a_min.y.max(b_min.y) < a_max.y.min(b_max.y)
 }
