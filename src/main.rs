@@ -1,4 +1,6 @@
+mod bot;
 mod meshchunks;
+mod spatialgrid;
 mod tilemap;
 mod world;
 
@@ -14,7 +16,8 @@ use nannou_egui::{
 
 use slotmap::DefaultKey;
 
-use crate::world::{DebugThing, Task, World};
+use crate::bot::Task;
+use crate::world::World;
 
 static BACKGROUND_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0x101010));
 static GROUND_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0x363652));
@@ -43,12 +46,6 @@ impl Model {
     fn reset_world(&mut self) {
         self.client.selection.clear();
         self.world.bots.clear();
-        self.world.debug_things.clear();
-
-        // for (x, y) in [(-3.5, -2.0), (-3.0, 0.0), (-2.0, 3.0)] {
-        //     self.world
-        //         .add_bot(vec2(x, y), Vec2::ZERO, Some(Task::Move(vec2(5.5, 4.1))));
-        // }
     }
 }
 
@@ -78,9 +75,10 @@ impl Camera {
 
 struct Settings {
     timestep: f32,
-    stopping_time: f32,
     spring_constant: f32,
     spring_distance: f32,
+    damping_constant: f32,
+    arrival_distance: f32,
     timescale: f32,
     interpolate_frames: bool,
     draw_head_dot: bool,
@@ -100,13 +98,14 @@ fn model(app: &App) -> Model {
     let window = app.window(window_id).unwrap();
     let egui = Egui::from_window(&window);
 
-    let world_size = ivec2(240, 160);
+    let world_size = ivec2(64, 64);
 
     let settings = Settings {
         timestep: 0.05,
-        stopping_time: 0.15,
         spring_constant: 16.0,
-        spring_distance: 0.2,
+        spring_distance: 0.1,
+        damping_constant: 4.0,
+        arrival_distance: 0.15,
         timescale: 1.0,
         interpolate_frames: true,
         draw_head_dot: true,
@@ -122,7 +121,7 @@ fn model(app: &App) -> Model {
         drag_start: None,
         camera: Camera {
             position: Vec2::ZERO,
-            zoom: Vec2::splat(32.0),
+            zoom: Vec2::splat(50.0),
         },
         edit_walls_mode: false,
     };
@@ -177,10 +176,10 @@ fn settings_window(model: &mut Model) {
     egui::Window::new("Settings")
         .default_pos((20.0, 20.0))
         .show(&ctx, |ui| {
-            ui.add(Slider::new(&mut model.settings.timestep, 0.01..=1.0).text("Timestep"));
-            ui.add(
-                Slider::new(&mut model.settings.stopping_time, 0.01..=0.5).text("Stopping time"),
-            );
+            ui.add(Slider::new(&mut model.settings.timestep, 0.001..=1.0).text("Timestep"));
+            // ui.add(
+            //     Slider::new(&mut model.settings.stopping_time, 0.01..=0.5).text("Stopping time"),
+            // );
             ui.add(
                 Slider::new(&mut model.settings.spring_constant, 0.01..=50.0)
                     .text("Spring constant"),
@@ -188,6 +187,14 @@ fn settings_window(model: &mut Model) {
             ui.add(
                 Slider::new(&mut model.settings.spring_distance, 0.01..=0.5)
                     .text("Spring distance"),
+            );
+            ui.add(
+                Slider::new(&mut model.settings.damping_constant, 0.01..=50.0)
+                    .text("Damping constant"),
+            );
+            ui.add(
+                Slider::new(&mut model.settings.arrival_distance, 0.001..=0.2)
+                    .text("Arrival distance"),
             );
             ui.add(Slider::new(&mut model.settings.timescale, 0.01..=5.0).text("Timescale"));
             ui.checkbox(&mut model.settings.interpolate_frames, "Interpolate frames");
@@ -200,6 +207,7 @@ fn settings_window(model: &mut Model) {
             }
 
             if !model.client.selection.is_empty() {
+                ui.label(format!("Selected: {}", model.client.selection.len()));
                 let bot = &model.world.bots[model.client.selection[0]];
                 ui.label(bot.summary());
             }
@@ -226,8 +234,27 @@ fn handle_sim_event(app: &App, model: &mut Model, event: WindowEvent) {
             Key::D => {
                 model.settings.draw_debug_lines = !model.settings.draw_debug_lines;
             }
-            Key::M => {
+            Key::W => {
                 model.client.edit_walls_mode = !model.client.edit_walls_mode;
+            }
+            Key::F => {
+                let min_x = -model.world.half_size.x;
+                let max_x = model.world.half_size.x;
+                let min_y = -model.world.half_size.y;
+                let max_y = model.world.half_size.y;
+                for _ in 0..5 {
+                    let x = random_range(min_x, max_x);
+                    let y = random_range(min_y, max_y);
+                    model.world.add_bot(vec2(x, y), Vec2::ZERO, None);
+                }
+            }
+            Key::A => {
+                model.client.selection = model.world.bots.keys().collect();
+            }
+            Key::Delete => {
+                for k in model.client.selection.drain(..) {
+                    model.world.delete_bot(k);
+                }
             }
             _ => {}
         },
@@ -374,9 +401,11 @@ fn view(app: &App, model: &Model, frame: Frame) {
 
     // bots
     let frac = model.client.accumulator / settings.timestep;
-    for (k, bot) in &world.bots {
+    for (_, bot) in &world.bots {
         let pos = if !settings.paused && settings.interpolate_frames {
             lerp(bot.prev_pos(), bot.position, frac)
+        } else if settings.draw_debug_lines {
+            bot.prev_pos()
         } else {
             bot.position
         };
@@ -392,13 +421,19 @@ fn view(app: &App, model: &Model, frame: Frame) {
             }
         }
 
+        let clr = if bot.tasks.is_empty() {
+            *FOREGROUND_COLOR
+        } else {
+            CYAN
+        };
         // the circle!
         wdraw
             .ellipse()
             .xy(pos)
+            // .radius(bot.radius + model.settings.spring_distance * 0.5 - 0.02)
             .radius(bot.radius - 0.02)
             .resolution(64.0)
-            .stroke(*FOREGROUND_COLOR)
+            .stroke(clr)
             .stroke_weight(0.04)
             .no_fill();
 
@@ -413,16 +448,92 @@ fn view(app: &App, model: &Model, frame: Frame) {
                 .resolution(64.0)
                 .color(*FOREGROUND_COLOR);
         }
+    }
 
-        if model.client.selection.contains(&k) {
+    for k in &model.client.selection {
+        let bot = &model.world.bots[*k];
+        let pos = if !settings.paused && settings.interpolate_frames {
+            lerp(bot.prev_pos(), bot.position, frac)
+        } else if settings.draw_debug_lines {
+            bot.prev_pos()
+        } else {
+            bot.position
+        };
+
+        wdraw
+            .ellipse()
+            .xy(pos)
+            .radius(bot.radius)
+            .resolution(64.0)
+            .stroke(rgba(0.4, 0.8, 0.4, 1.0))
+            .stroke_weight(0.03)
+            .no_fill();
+
+        if model.settings.draw_debug_lines {
+            let scale = model.settings.timestep;
+            let thickness = 0.02;
+            let p = pos;
+            if bot.debug_accel.length_squared() > 0.001 {
+                let v = bot.debug_accel * scale;
+                draw_arrow(&wdraw, p, p + v, thickness * 1.5, rgba8(0, 255, 255, 255));
+            }
+            if bot.debug_seek.length_squared() > 0.001 {
+                let v = bot.debug_seek * scale;
+                draw_arrow(&wdraw, p, p + v, thickness, rgba8(0, 255, 0, 255));
+            }
+            if bot.debug_sep.length_squared() > 0.001 {
+                let v = bot.debug_sep * scale;
+                draw_arrow(&wdraw, p, p + v, thickness, rgba8(255, 0, 0, 255));
+            }
+            if bot.debug_friction.length_squared() > 0.001 {
+                let v = bot.debug_friction * scale;
+                draw_arrow(&wdraw, p, p + v, thickness, rgba8(255, 255, 0, 255));
+            }
+
             wdraw
                 .ellipse()
                 .xy(pos)
-                .radius(bot.radius)
+                .radius(bot.radius + model.settings.spring_distance * 0.5 - 0.005)
                 .resolution(64.0)
-                .stroke(rgba(0.4, 0.8, 0.4, 1.0))
-                .stroke_weight(0.03)
+                .stroke(RED)
+                .stroke_weight(0.01)
                 .no_fill();
+        }
+
+        for task in &bot.tasks {
+            match task {
+                Task::Move(target) => {
+                    let clr = rgba(0.4, 0.8, 0.4, 1.0);
+                    wdraw
+                        .ellipse()
+                        .xy(*target)
+                        .radius(0.05)
+                        .resolution(8.0)
+                        .stroke(clr)
+                        .stroke_weight(0.02)
+                        .no_fill();
+                    let r = 0.1;
+                    wdraw
+                        .line()
+                        .start(*target + vec2(-r, 0.0))
+                        .end(*target + vec2(r, 0.0))
+                        .weight(0.02)
+                        .color(clr);
+                    wdraw
+                        .line()
+                        .start(*target + vec2(0.0, -r))
+                        .end(*target + vec2(0.0, r))
+                        .weight(0.02)
+                        .color(clr);
+                }
+            }
+        }
+
+        let clr = rgba(0.8, 0.8, 0.8, 0.6);
+        for w in bot.tasks.windows(2) {
+            let Task::Move(a) = w[0];
+            let Task::Move(b) = w[1];
+            wdraw.line().start(a).end(b).weight(0.01).color(clr);
         }
     }
 
@@ -433,22 +544,6 @@ fn view(app: &App, model: &Model, frame: Frame) {
             .xy(start + (end - start) / 2.0)
             .wh(end - start)
             .color(rgba(1.0, 1.0, 1.0, 0.02));
-    }
-
-    if model.settings.draw_debug_lines {
-        for &(thing, color) in &model.world.debug_things {
-            match thing {
-                DebugThing::Point(p) => {
-                    wdraw.rect().xy(p).w_h(0.1, 0.1).color(color);
-                }
-                DebugThing::Vec(p, v) => {
-                    draw_arrow(&wdraw, p, p + v, 0.03, color);
-                }
-                DebugThing::Arrow(a, b) => {
-                    draw_arrow(&wdraw, a, b, 0.03, color);
-                }
-            }
-        }
     }
 
     // mouse debug info
@@ -546,4 +641,16 @@ pub fn axis_aligned_rect_rect_intersects(
     let b_min = b_center - b_halfsize;
     let b_max = b_center + b_halfsize;
     a_min.x.max(b_min.x) < a_max.x.min(b_max.x) && a_min.y.max(b_min.y) < a_max.y.min(b_max.y)
+}
+
+pub fn distance_to_segment_sq(start: Vec2, end: Vec2, target: Vec2) -> f32 {
+    let ab = end - start;
+    let ap = target - start;
+    let len_sq = ab.length_squared();
+    if len_sq == 0.0 {
+        return (target - start).length_squared();
+    }
+    let t = (ap.dot(ab) / len_sq).clamp(0.0, 1.0);
+    let closest_point = start + (ab * t);
+    (target - closest_point).length_squared()
 }

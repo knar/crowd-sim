@@ -94,72 +94,87 @@ impl MeshChunks {
                             //  t |  t |  f  ->  "inner corner"
                             //  t |  t |  t  ->  no border
 
-                            let vs = if gx {
+                            let (fill, border, border_ontop) = if gx {
                                 if gy {
                                     if gxy {
                                         // no border
-                                        vec![
-                                            (vec2(r1, 0.0) * d, Vec2::ZERO),
-                                            (vec2(r1, r1) * d, Vec2::ZERO),
-                                            (vec2(0.0, r1) * d, Vec2::ZERO),
-                                        ]
+                                        let fill = vec![
+                                            [Vec2::ZERO, vec2(r1, 0.0), vec2(r1, r1)],
+                                            [Vec2::ZERO, vec2(r1, r1), vec2(0.0, r1)],
+                                        ];
+                                        (fill, vec![], vec![])
                                     } else {
                                         // inner corner
-                                        // TODO: for now just the same as no border above
-                                        vec![
-                                            (vec2(r1, 0.0) * d, Vec2::ZERO),
-                                            (vec2(r1, r1) * d, Vec2::ZERO),
-                                            (vec2(0.0, r1) * d, Vec2::ZERO),
-                                        ]
+                                        let fill = vec![
+                                            [Vec2::ZERO, vec2(r1, 0.0), vec2(r1, r1)],
+                                            [Vec2::ZERO, vec2(r1, r1), vec2(0.0, r1)],
+                                        ];
+                                        let border_ontop = vec![
+                                            [vec2(r0, r0), vec2(r0, r1), vec2(r1, r1)],
+                                            [vec2(r0, r0), vec2(r1, r0), vec2(r1, r1)],
+                                        ];
+                                        (fill, vec![], border_ontop)
                                     }
                                 } else {
                                     // border on y edge
-                                    vec![
-                                        (vec2(r1, 0.0) * d, vec2(r1, 0.0) * d),
-                                        (vec2(r1, r0) * d, vec2(r1, r1) * d),
-                                        (vec2(0.0, r0) * d, vec2(0.0, r1) * d),
-                                    ]
+                                    let fill = vec![
+                                        [Vec2::ZERO, vec2(r1, 0.0), vec2(r1, r0)],
+                                        [Vec2::ZERO, vec2(r1, r0), vec2(0.0, r0)],
+                                    ];
+                                    let border = vec![
+                                        [Vec2::ZERO, vec2(r1, 0.0), vec2(r1, r1)],
+                                        [Vec2::ZERO, vec2(r1, r1), vec2(0.0, r1)],
+                                    ];
+                                    (fill, border, vec![])
                                 }
                             } else if gy {
                                 // border on x edge
-                                vec![
-                                    (vec2(0.0, r1) * d, vec2(0.0, r1) * d),
-                                    (vec2(r0, r1) * d, vec2(r1, r1) * d),
-                                    (vec2(r0, 0.0) * d, vec2(r1, 0.0) * d),
-                                ]
+                                let fill = vec![
+                                    [Vec2::ZERO, vec2(0.0, r1), vec2(r0, r1)],
+                                    [Vec2::ZERO, vec2(r0, r1), vec2(r0, 0.0)],
+                                ];
+                                let border = vec![
+                                    [Vec2::ZERO, vec2(0.0, r1), vec2(r1, r1)],
+                                    [Vec2::ZERO, vec2(r1, r1), vec2(r1, 0.0)],
+                                ];
+                                (fill, border, vec![])
                             } else if gxy {
                                 // border on both x and y edge
-                                vec![
-                                    (vec2(r0, 0.0) * d, vec2(r1, 0.0) * d),
-                                    (vec2(r0, r0) * d, vec2(r1, r1) * d),
-                                    (vec2(0.0, r0) * d, vec2(0.0, r1) * d),
-                                ]
+                                let fill = vec![
+                                    [Vec2::ZERO, vec2(0.0, r0), vec2(r0, r0)],
+                                    [Vec2::ZERO, vec2(r0, r0), vec2(r0, 0.0)],
+                                ];
+                                let border = vec![
+                                    [Vec2::ZERO, vec2(0.0, r1), vec2(r1, r1)],
+                                    [Vec2::ZERO, vec2(r1, r1), vec2(r1, 0.0)],
+                                ];
+                                (fill, border, vec![])
                             } else {
                                 // rounded corner
                                 let n = 6;
                                 let step = PI / 2.0 / n as f32;
-                                let s = d.rotate(-PI / 4.0).normalize();
-                                (0..=n)
-                                    .map(|i| {
-                                        let v = s.rotate(step * i as f32);
-                                        (v * r0, v * r1)
-                                    })
-                                    .collect()
+                                let s = Vec2::ONE.rotate(-PI / 4.0).normalize();
+                                let mut fill = vec![];
+                                let mut border = vec![];
+                                for i in 0..n {
+                                    let a = s.rotate(step * i as f32);
+                                    let b = s.rotate(step * (i + 1) as f32);
+                                    fill.push([Vec2::ZERO, a * r0, b * r0]);
+                                    border.push([Vec2::ZERO, a * r1, b * r1]);
+                                }
+                                (fill, border, vec![])
                             };
 
-                            for w in vs.windows(2) {
-                                // border
-                                if w[0].1 != Vec2::ZERO {
-                                    let vs = [Vec2::ZERO, w[0].1, w[1].1].map(|p| p + center);
-                                    let tri =
-                                        Tri::from(vs.map(|p| (p.extend(0.0), *WALL_BORDER_COLOR)));
+                            for (color, tris) in [
+                                (*WALL_BORDER_COLOR, border),
+                                (*WALL_COLOR, fill),
+                                (*WALL_BORDER_COLOR, border_ontop),
+                            ] {
+                                for vs in tris {
+                                    let vs = vs.map(|p| (p * d) + center);
+                                    let tri = Tri::from(vs.map(|p| (p.extend(0.0), color)));
                                     chunk.tris.push(tri);
                                 }
-
-                                // fill
-                                let vs = [Vec2::ZERO, w[0].0, w[1].0].map(|p| p + center);
-                                let tri = Tri::from(vs.map(|p| (p.extend(0.0), *WALL_COLOR)));
-                                chunk.tris.push(tri);
                             }
                         }
                     }
@@ -169,12 +184,16 @@ impl MeshChunks {
     }
 
     pub fn draw(&self, draw: &Draw, view_center: Vec2, view_size: Vec2) {
-        let chunk_size = vec2(self.chunk_size.x as f32, self.chunk_size.y as f32);
+        let chunk_size = self.chunk_size.as_f32();
+        let half_map_size = self.map_size.as_f32() / 2.0;
         for (i, chunk) in self.chunks.iter().enumerate() {
-            let x = ((i as i32) % self.stride) * self.chunk_size.x;
-            let y = ((i as i32) / self.stride) * self.chunk_size.y;
-            let chunk_center = vec2(x as f32, y as f32) + chunk_size / 2.0
-                - vec2(self.map_size.x as f32, self.map_size.y as f32) / 2.0;
+            // let x = ((i as i32) % self.stride) * self.chunk_size.x;
+            // let y = ((i as i32) / self.stride) * self.chunk_size.y;
+            // let chunk_center = vec2(x as f32, y as f32) + chunk_size / 2.0
+            // -vec2(self.map_size.x as f32, self.map_size.y as f32) / 2.0;
+            let i = i as i32;
+            let block = ivec2(i % self.stride, i / self.stride) * self.chunk_size;
+            let chunk_center = block.as_f32() + chunk_size / 2.0 - half_map_size;
             if axis_aligned_rect_rect_intersects(chunk_center, chunk_size, view_center, view_size) {
                 draw.mesh().tris_colored(chunk.tris.clone());
             }

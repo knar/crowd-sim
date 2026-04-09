@@ -21,7 +21,7 @@ impl TileMap {
             walls[(stride * y) as usize] = true;
             walls[(stride * (y + 1) - 1) as usize] = true;
         }
-        let half_size = vec2(size.x as f32, size.y as f32) / 2.0;
+        let half_size = size.as_f32() / 2.0;
         Self {
             walls,
             stride,
@@ -40,12 +40,11 @@ impl TileMap {
     }
 
     pub fn tile_center(&self, coord: IVec2) -> Vec2 {
-        vec2(coord.x as f32, coord.y as f32) - self.half_size + Vec2::splat(0.5)
+        coord.as_f32() - self.half_size + Vec2::splat(0.5)
     }
 
     pub fn coord(&self, pos: Vec2) -> IVec2 {
-        let tile = (pos + self.half_size).floor();
-        ivec2(tile.x as i32, tile.y as i32)
+        (pos + self.half_size).floor().as_i32()
     }
 
     fn idx(&self, tile: IVec2) -> usize {
@@ -55,6 +54,11 @@ impl TileMap {
     pub fn line_of_sight(&self, from: Vec2, to: Vec2) -> bool {
         self.line_hit(from, to) == to
     }
+
+    // pub fn los_with_radius(&self, from: Vec2, to: Vec2, r: f32) -> bool {
+    //     let d = (to - from).normalize().perp() * r;
+    //     self.line_hit(from + d, to + d) == to + d && self.line_hit(from - d, to - d) == to - d
+    // }
 
     fn line_hit(&self, from: Vec2, to: Vec2) -> Vec2 {
         let dir = (to - from).normalize();
@@ -88,9 +92,9 @@ impl TileMap {
             }
             if cur == end {
                 // // Allow line of sight if the point does not collide
-                if self.resolve_collisions(to, 0.0) == to {
-                    return to;
-                }
+                // if self.resolve_collisions(to, 0.0) == to {
+                return to;
+                // }
             }
             return from + dir * dist;
         }
@@ -114,20 +118,18 @@ impl TileMap {
         let g = self[tile];
         let gx = self[tile + ivec2(sign.x as i32, 0)];
         let gy = self[tile + ivec2(0, sign.y as i32)];
-        let gxy = self[tile + ivec2(sign.x as i32, sign.y as i32)];
+        let gxy = self[tile + sign.as_i32()];
 
         let crad = radius + 0.5;
         if !g {
             // +X wall or corner
-            if gx {
-                if apos.x > 0.5 - radius {
-                    if gy || gxy {
-                        pos.x = (0.5 - radius) * sign.x + tile_center.x;
-                    } else {
-                        let d = apos - vec2(1.0, 0.0);
-                        if d.length_squared() < crad * crad {
-                            pos = (d / d.length() * crad + vec2(1.0, 0.0)) * sign + tile_center;
-                        }
+            if gx && apos.x > 0.5 - radius {
+                if gy || gxy {
+                    pos.x = (0.5 - radius) * sign.x + tile_center.x;
+                } else {
+                    let d = apos - vec2(1.0, 0.0);
+                    if d.length_squared() < crad * crad {
+                        pos = (d / d.length() * crad + vec2(1.0, 0.0)) * sign + tile_center;
                     }
                 }
             }
