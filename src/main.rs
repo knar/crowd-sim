@@ -75,9 +75,8 @@ impl Camera {
 
 struct Settings {
     timestep: f32,
-    spring_constant: f32,
-    spring_distance: f32,
-    damping_constant: f32,
+    collision_resolver_iters: usize,
+    collision_resolver_weight: f32,
     arrival_distance: f32,
     timescale: f32,
     interpolate_frames: bool,
@@ -90,7 +89,7 @@ struct Settings {
 fn model(app: &App) -> Model {
     let window_id = app
         .new_window()
-        .title("its just boids bruv")
+        .title("it's just rice bruv")
         .view(view)
         .raw_event(raw_gui_event)
         .build()
@@ -98,14 +97,13 @@ fn model(app: &App) -> Model {
     let window = app.window(window_id).unwrap();
     let egui = Egui::from_window(&window);
 
-    let world_size = ivec2(64, 64);
+    let world_size = ivec2(256, 256);
 
     let settings = Settings {
         timestep: 0.05,
-        spring_constant: 16.0,
-        spring_distance: 0.1,
-        damping_constant: 4.0,
-        arrival_distance: 0.15,
+        collision_resolver_iters: 3,
+        collision_resolver_weight: 0.5,
+        arrival_distance: 0.01,
         timescale: 1.0,
         interpolate_frames: true,
         draw_head_dot: true,
@@ -176,21 +174,14 @@ fn settings_window(model: &mut Model) {
     egui::Window::new("Settings")
         .default_pos((20.0, 20.0))
         .show(&ctx, |ui| {
-            ui.add(Slider::new(&mut model.settings.timestep, 0.001..=1.0).text("Timestep"));
-            // ui.add(
-            //     Slider::new(&mut model.settings.stopping_time, 0.01..=0.5).text("Stopping time"),
-            // );
+            ui.add(Slider::new(&mut model.settings.timestep, 0.01..=1.0).text("Timestep"));
             ui.add(
-                Slider::new(&mut model.settings.spring_constant, 0.01..=50.0)
-                    .text("Spring constant"),
+                Slider::new(&mut model.settings.collision_resolver_iters, 1..=20)
+                    .text("Collision resolver iterations"),
             );
             ui.add(
-                Slider::new(&mut model.settings.spring_distance, 0.01..=0.5)
-                    .text("Spring distance"),
-            );
-            ui.add(
-                Slider::new(&mut model.settings.damping_constant, 0.01..=50.0)
-                    .text("Damping constant"),
+                Slider::new(&mut model.settings.collision_resolver_weight, 0.01..=1.0)
+                    .text("Collision resolver weight"),
             );
             ui.add(
                 Slider::new(&mut model.settings.arrival_distance, 0.001..=0.2)
@@ -430,9 +421,8 @@ fn view(app: &App, model: &Model, frame: Frame) {
         wdraw
             .ellipse()
             .xy(pos)
-            // .radius(bot.radius + model.settings.spring_distance * 0.5 - 0.02)
             .radius(bot.radius - 0.02)
-            .resolution(64.0)
+            .resolution(32.0)
             .stroke(clr)
             .stroke_weight(0.04)
             .no_fill();
@@ -445,7 +435,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
                 .ellipse()
                 .xy(pos + lean * bot.radius * 0.6)
                 .radius(bot.radius * 0.4)
-                .resolution(64.0)
+                .resolution(16.0)
                 .color(*FOREGROUND_COLOR);
         }
     }
@@ -464,7 +454,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
             .ellipse()
             .xy(pos)
             .radius(bot.radius)
-            .resolution(64.0)
+            .resolution(32.0)
             .stroke(rgba(0.4, 0.8, 0.4, 1.0))
             .stroke_weight(0.03)
             .no_fill();
@@ -477,27 +467,17 @@ fn view(app: &App, model: &Model, frame: Frame) {
                 let v = bot.debug_accel * scale;
                 draw_arrow(&wdraw, p, p + v, thickness * 1.5, rgba8(0, 255, 255, 255));
             }
-            if bot.debug_seek.length_squared() > 0.001 {
-                let v = bot.debug_seek * scale;
-                draw_arrow(&wdraw, p, p + v, thickness, rgba8(0, 255, 0, 255));
-            }
-            if bot.debug_sep.length_squared() > 0.001 {
-                let v = bot.debug_sep * scale;
-                draw_arrow(&wdraw, p, p + v, thickness, rgba8(255, 0, 0, 255));
-            }
-            if bot.debug_friction.length_squared() > 0.001 {
-                let v = bot.debug_friction * scale;
-                draw_arrow(&wdraw, p, p + v, thickness, rgba8(255, 255, 0, 255));
-            }
 
-            wdraw
-                .ellipse()
-                .xy(pos)
-                .radius(bot.radius + model.settings.spring_distance * 0.5 - 0.005)
-                .resolution(64.0)
-                .stroke(RED)
-                .stroke_weight(0.01)
-                .no_fill();
+            if bot.debug_arrival_dist > 0.0 {
+                wdraw
+                    .ellipse()
+                    .xy(pos)
+                    .radius(bot.debug_arrival_dist - 0.01)
+                    .resolution(32.0)
+                    .stroke(GREEN)
+                    .stroke_weight(0.02)
+                    .no_fill();
+            }
         }
 
         for task in &bot.tasks {

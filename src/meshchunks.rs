@@ -2,7 +2,7 @@ use std::f32::consts::PI;
 
 use nannou::{
     Draw,
-    color::Rgb8,
+    color::{Hsl, LinSrgba},
     geom::Tri,
     glam::{IVec2, Vec2, Vec3, ivec2, vec2},
     math::Vec2Rotate,
@@ -20,7 +20,7 @@ pub struct MeshChunks {
 
 #[derive(Clone, Debug)]
 struct Chunk {
-    tris: Vec<Tri<(Vec3, Rgb8)>>,
+    tris: Vec<Tri<(Vec3, LinSrgba)>>,
     dirty: bool,
 }
 
@@ -170,6 +170,8 @@ impl MeshChunks {
                                 (*WALL_COLOR, fill),
                                 (*WALL_BORDER_COLOR, border_ontop),
                             ] {
+                                let color = Hsl::from(color.into_format());
+                                let color = LinSrgba::from(color);
                                 for vs in tris {
                                     let vs = vs.map(|p| (p * d) + center);
                                     let tri = Tri::from(vs.map(|p| (p.extend(0.0), color)));
@@ -180,6 +182,8 @@ impl MeshChunks {
                     }
                 }
             }
+
+            chunk.dirty = false;
         }
     }
 
@@ -187,15 +191,11 @@ impl MeshChunks {
         let chunk_size = self.chunk_size.as_f32();
         let half_map_size = self.map_size.as_f32() / 2.0;
         for (i, chunk) in self.chunks.iter().enumerate() {
-            // let x = ((i as i32) % self.stride) * self.chunk_size.x;
-            // let y = ((i as i32) / self.stride) * self.chunk_size.y;
-            // let chunk_center = vec2(x as f32, y as f32) + chunk_size / 2.0
-            // -vec2(self.map_size.x as f32, self.map_size.y as f32) / 2.0;
             let i = i as i32;
             let block = ivec2(i % self.stride, i / self.stride) * self.chunk_size;
             let chunk_center = block.as_f32() + chunk_size / 2.0 - half_map_size;
             if axis_aligned_rect_rect_intersects(chunk_center, chunk_size, view_center, view_size) {
-                draw.mesh().tris_colored(chunk.tris.clone());
+                draw.mesh().tris_colored(chunk.tris.iter().copied());
             }
         }
     }

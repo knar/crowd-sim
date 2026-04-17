@@ -45,20 +45,22 @@ impl SpatialGrid {
         }
     }
 
-    pub fn query(&self, pos: Vec2, radius: f32) -> Vec<DefaultKey> {
-        let mut neighbors = Vec::new();
+    pub fn query(&self, pos: Vec2, radius: f32) -> impl Iterator<Item = DefaultKey> + '_ {
         let p = pos + self.origin_offset;
-        let min_x = ((p.x - radius) / self.cell_size).floor() as i32;
-        let max_x = ((p.x + radius) / self.cell_size).ceil() as i32;
-        let min_y = ((p.y - radius) / self.cell_size).floor() as i32;
-        let max_y = ((p.y + radius) / self.cell_size).ceil() as i32;
+        let min_x = (((p.x - radius) / self.cell_size).floor() as i32).max(0);
+        let max_x = (((p.x + radius) / self.cell_size).ceil() as i32).min(self.cols);
+        let min_y = (((p.y - radius) / self.cell_size).floor() as i32).max(0);
+        let max_y = (((p.y + radius) / self.cell_size).ceil() as i32).min(self.rows);
 
-        for x in min_x.max(0)..max_x.min(self.cols) {
-            for y in min_y.max(0)..max_y.min(self.rows) {
+        (min_y..max_y).flat_map(move |y| {
+            (min_x..max_x).flat_map(move |x| {
                 let idx = (y * self.cols + x) as usize;
-                neighbors.extend_from_slice(&self.cells[idx]);
-            }
-        }
-        neighbors
+                self.cells[idx].iter().copied()
+            })
+        })
+    }
+
+    pub fn iter_keys(&self) -> impl Iterator<Item = DefaultKey> + '_ {
+        self.cells.iter().flat_map(|cell| cell.iter().copied())
     }
 }

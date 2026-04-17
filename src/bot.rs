@@ -20,9 +20,8 @@ pub struct Bot {
     pub last_target: Option<Vec2>,
 
     pub debug_accel: Vec2,
-    pub debug_sep: Vec2,
-    pub debug_seek: Vec2,
-    pub debug_friction: Vec2,
+
+    pub debug_arrival_dist: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -38,15 +37,13 @@ impl Bot {
             velocity: vel,
             waypoints: Vec::new(),
             radius: 0.2,
-            max_speed: 6.0,
-            max_accel: 60.0,
+            max_speed: 3.0,
+            max_accel: 1000.0,
             trail: [pos; 20],
             trail_idx: 0,
             last_target: None,
             debug_accel: Vec2::ZERO,
-            debug_sep: Vec2::ZERO,
-            debug_seek: Vec2::ZERO,
-            debug_friction: Vec2::ZERO,
+            debug_arrival_dist: 0.0,
         }
     }
 
