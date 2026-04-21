@@ -1,5 +1,6 @@
 mod bot;
 mod meshchunks;
+mod orca;
 mod spatialgrid;
 mod tilemap;
 mod world;
@@ -9,6 +10,8 @@ use std::sync::LazyLock;
 
 use nannou::color::{Rgb, rgb_u32, rgba8};
 use nannou::prelude::*;
+use nannou::rand::rngs::SmallRng;
+use nannou::rand::{Rng, SeedableRng};
 use nannou_egui::{
     Egui,
     egui::{self, Slider},
@@ -34,6 +37,7 @@ struct Model {
     client: Client,
     settings: Settings,
     world: World,
+    rng: SmallRng,
 }
 
 impl Model {
@@ -46,6 +50,10 @@ impl Model {
     fn reset_world(&mut self) {
         self.client.selection.clear();
         self.world.bots.clear();
+    }
+
+    fn tick(&mut self) {
+        self.world.tick(&self.settings, &mut self.rng);
     }
 }
 
@@ -75,8 +83,10 @@ impl Camera {
 
 struct Settings {
     timestep: f32,
+    use_orca: bool,
+    orca_time_horizon: f32,
     collision_resolver_iters: usize,
-    collision_resolver_weight: f32,
+    collision_resolver_fraction: f32,
     arrival_distance: f32,
     timescale: f32,
     interpolate_frames: bool,
@@ -101,8 +111,10 @@ fn model(app: &App) -> Model {
 
     let settings = Settings {
         timestep: 0.05,
+        use_orca: true,
+        orca_time_horizon: 0.3,
         collision_resolver_iters: 3,
-        collision_resolver_weight: 0.5,
+        collision_resolver_fraction: 0.5,
         arrival_distance: 0.01,
         timescale: 1.0,
         interpolate_frames: true,
@@ -129,6 +141,7 @@ fn model(app: &App) -> Model {
         settings,
         client,
         world: World::new(world_size),
+        rng: SmallRng::seed_from_u64(0),
     };
     model.reset_world();
 
@@ -149,7 +162,7 @@ fn event(app: &App, model: &mut Model, event: Event) {
             }
             while model.client.accumulator >= model.settings.timestep {
                 model.client.accumulator -= model.settings.timestep;
-                model.world.tick(&model.settings);
+                model.tick();
             }
 
             model.egui.set_elapsed_time(update.since_start);
@@ -174,28 +187,84 @@ fn settings_window(model: &mut Model) {
     egui::Window::new("Settings")
         .default_pos((20.0, 20.0))
         .show(&ctx, |ui| {
-            ui.add(Slider::new(&mut model.settings.timestep, 0.01..=1.0).text("Timestep"));
-            ui.add(
-                Slider::new(&mut model.settings.collision_resolver_iters, 1..=20)
-                    .text("Collision resolver iterations"),
-            );
-            ui.add(
-                Slider::new(&mut model.settings.collision_resolver_weight, 0.01..=1.0)
-                    .text("Collision resolver weight"),
-            );
-            ui.add(
-                Slider::new(&mut model.settings.arrival_distance, 0.001..=0.2)
-                    .text("Arrival distance"),
-            );
-            ui.add(Slider::new(&mut model.settings.timescale, 0.01..=5.0).text("Timescale"));
-            ui.checkbox(&mut model.settings.interpolate_frames, "Interpolate frames");
-            ui.checkbox(&mut model.settings.draw_head_dot, "Draw head dot");
-            ui.checkbox(&mut model.settings.draw_debug_lines, "Draw debug lines");
-            ui.checkbox(&mut model.settings.draw_trail, "Draw trail");
-            ui.checkbox(&mut model.settings.paused, "Pause");
-            if model.settings.paused && ui.button("Tick").clicked() {
-                model.world.tick(&model.settings);
-            }
+            egui::Grid::new("settings_grid")
+                .num_columns(2)
+                .spacing([40.0, 4.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Timestep");
+                    ui.add(Slider::new(&mut model.settings.timestep, 0.01..=0.2));
+                    ui.end_row();
+
+                    ui.label("Use ORCA");
+                    ui.checkbox(&mut model.settings.use_orca, "");
+                    ui.end_row();
+
+                    ui.label("ORCA Time Horizon");
+                    ui.add(Slider::new(
+                        &mut model.settings.orca_time_horizon,
+                        0.1..=3.0,
+                    ));
+                    ui.end_row();
+
+                    ui.label("Collision resolver iterations");
+                    ui.add(Slider::new(
+                        &mut model.settings.collision_resolver_iters,
+                        1..=10,
+                    ));
+                    ui.end_row();
+
+                    ui.label("Collision resolver fraction");
+                    ui.add(Slider::new(
+                        &mut model.settings.collision_resolver_fraction,
+                        0.05..=1.0,
+                    ));
+                    ui.end_row();
+
+                    ui.label("Arrival distance");
+                    ui.add(Slider::new(
+                        &mut model.settings.arrival_distance,
+                        0.001..=0.2,
+                    ));
+                    ui.end_row();
+
+                    ui.separator();
+                    ui.separator();
+                    ui.end_row();
+
+                    ui.label("Timescale");
+                    ui.add(Slider::new(&mut model.settings.timescale, 0.01..=5.0));
+                    ui.end_row();
+
+                    ui.label("Interpolate frames");
+                    ui.checkbox(&mut model.settings.interpolate_frames, "");
+                    ui.end_row();
+
+                    ui.label("Draw head dot");
+                    ui.checkbox(&mut model.settings.draw_head_dot, "");
+                    ui.end_row();
+
+                    ui.label("Draw debug lines");
+                    ui.checkbox(&mut model.settings.draw_debug_lines, "");
+                    ui.end_row();
+
+                    ui.label("Draw trail");
+                    ui.checkbox(&mut model.settings.draw_trail, "");
+                    ui.end_row();
+
+                    ui.separator();
+                    ui.separator();
+                    ui.end_row();
+
+                    ui.label("Pause");
+                    ui.checkbox(&mut model.settings.paused, "");
+                    ui.end_row();
+
+                    if model.settings.paused && ui.button("Tick").clicked() {
+                        model.world.tick(&model.settings, &mut model.rng);
+                        ui.end_row();
+                    }
+                });
 
             if !model.client.selection.is_empty() {
                 ui.label(format!("Selected: {}", model.client.selection.len()));
@@ -212,7 +281,7 @@ fn handle_sim_event(app: &App, model: &mut Model, event: WindowEvent) {
                 model.settings.paused = !model.settings.paused;
             }
             Key::Return if model.settings.paused => {
-                model.world.tick(&model.settings);
+                model.tick();
             }
             Key::S => {
                 if let Some(pos) = model.mouse_world_pos() {
@@ -221,6 +290,56 @@ fn handle_sim_event(app: &App, model: &mut Model, event: WindowEvent) {
             }
             Key::R => {
                 model.reset_world();
+            }
+            Key::Key1 => {
+                model.reset_world();
+                let pos = vec2(-5.0, 0.0);
+                model.world.add_bot(pos, Vec2::ZERO, Some(Task::Move(-pos)));
+                model.world.add_bot(-pos, Vec2::ZERO, Some(Task::Move(pos)));
+            }
+            Key::Key2 => {
+                model.reset_world();
+                let pos = vec2(-5.0, 0.0);
+                let dy = vec2(0.0, 0.4);
+                model.world.add_bot(pos, Vec2::ZERO, Some(Task::Move(-pos)));
+                model
+                    .world
+                    .add_bot(-pos + dy, Vec2::ZERO, Some(Task::Move(pos)));
+                model
+                    .world
+                    .add_bot(-pos - dy, Vec2::ZERO, Some(Task::Move(pos)));
+            }
+            Key::Key3 => {
+                model.reset_world();
+                let mut rng = SmallRng::seed_from_u64(0);
+                let x = 5.0;
+                for _ in 0..10 {
+                    let pos = vec2(rng.gen_range(-x..x), rng.gen_range(-x..x));
+                    model.world.add_bot(pos, Vec2::ZERO, Some(Task::Move(-pos)));
+                }
+            }
+            Key::Key4 => {
+                model.reset_world();
+                let mut rng = SmallRng::seed_from_u64(0);
+                let x = 10.0;
+                for _ in 0..50 {
+                    let pos = vec2(rng.gen_range(-x..x), rng.gen_range(-x..x));
+                    model.world.add_bot(pos, Vec2::ZERO, Some(Task::Move(-pos)));
+                }
+            }
+            Key::Key5 => {
+                model.reset_world();
+                let mut rng = SmallRng::seed_from_u64(0);
+                for _ in 0..100 {
+                    let a = vec2(rng.gen_range(-10.0..-8.0), rng.gen_range(-10.0..10.0));
+                    let b = vec2(rng.gen_range(8.0..10.0), rng.gen_range(-10.0..10.0));
+                    model
+                        .world
+                        .add_bot(a, Vec2::ZERO, Some(Task::Move(vec2(-a.x, a.y))));
+                    model
+                        .world
+                        .add_bot(b, Vec2::ZERO, Some(Task::Move(vec2(-b.x, b.y))));
+                }
             }
             Key::D => {
                 model.settings.draw_debug_lines = !model.settings.draw_debug_lines;

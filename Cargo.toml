@@ -7,8 +7,8 @@ edition = "2024"
 nannou = "0.19.0"
 nannou_egui = "0.19.0"
 slotmap = "1.0.7"
-pather = { path = "../../../git.sr.ht/jonahs/bots/packages/world/pather" }
-math = { path = "../../../git.sr.ht/jonahs/bots/packages/math" }
+pather = { path = "../../../git.sr.ht/~jonahs/bots/packages/world/pather" }
+math = { path = "../../../git.sr.ht/~jonahs/bots/packages/math" }
 
 [profile.release]
 debug = true

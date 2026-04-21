@@ -1,4 +1,7 @@
-use nannou::glam::{IVec2, Vec2, ivec2, vec2};
+use nannou::{
+    glam::{IVec2, Vec2, ivec2, vec2},
+    rand::{Rng, rngs::SmallRng},
+};
 use pather::Pather;
 use slotmap::{DefaultKey, SlotMap};
 
@@ -6,6 +9,7 @@ use crate::{
     Settings,
     bot::{Bot, Task, massage_waypoints},
     meshchunks::MeshChunks,
+    orca::{OptimizationGoal, linear_program_2, linear_program_3},
     spatialgrid::SpatialGrid,
     tilemap::TileMap,
 };
@@ -36,120 +40,45 @@ impl World {
         }
     }
 
-    pub fn tick(&mut self, settings: &Settings) {
-        self.repath_bots();
-        self.stringpull_waypoints();
-        self.apply_arrivals(settings);
-
+    pub fn tick(&mut self, settings: &Settings, rng: &mut SmallRng) {
         for (_k, bot) in &mut self.bots {
             bot.log_position();
         }
 
-        let steer_forces: Vec<(DefaultKey, Vec2)> = self
-            .bots
-            .keys()
-            .map(|i| (i, self.compute_steering(i, settings)))
+        self.repath_bots();
+        self.stringpull_waypoints();
+
+        self.repop_spatial_grid();
+        self.apply_arrivals(settings);
+
+        let new_vels: Vec<_> = self
+            .grid
+            .iter_keys()
+            .map(|i| {
+                let vel = if settings.use_orca {
+                    self.compute_orca_velocity(i, settings, rng)
+                } else {
+                    self.compute_target_velocity(i, settings, rng)
+                };
+                (i, vel)
+            })
             .collect();
 
-        let dt = settings.timestep;
-        for (k, accel) in steer_forces {
+        for (k, vel) in new_vels {
             let bot = &mut self.bots[k];
-            bot.debug_accel = accel;
 
-            bot.velocity += accel * dt;
-            bot.velocity = bot.velocity.clamp_length_max(bot.max_speed);
-
-            // deadzone
+            bot.velocity = vel.clamp_length_max(bot.max_speed);
             if bot.waypoints.is_empty() && bot.velocity.length_squared() < 0.001 {
                 bot.velocity = Vec2::ZERO;
             }
 
-            bot.position += bot.velocity * dt;
+            bot.position += bot.velocity * settings.timestep;
         }
 
         self.repop_spatial_grid();
-
         for _ in 0..settings.collision_resolver_iters {
-            let mut displacements = Vec::new();
-            for i in self.bots.keys() {
-                let neighbors = self
-                    .grid
-                    .query(self.bots[i].position, self.bots[i].radius + 1.0);
-                for j in neighbors {
-                    if i >= j {
-                        continue;
-                    }
-
-                    let d = self.bots[i].position - self.bots[j].position;
-                    let dist_sq = d.length_squared();
-                    let r_sum = self.bots[i].radius + self.bots[j].radius;
-
-                    if dist_sq < r_sum.powi(2) {
-                        let (dir, overlap) = if dist_sq > 0.00001 {
-                            let dist = dist_sq.sqrt();
-                            (d / dist, r_sum - dist)
-                        } else {
-                            (vec2(1.0, 0.0), r_sum)
-                        };
-
-                        let moving_i = !self.bots[i].waypoints.is_empty();
-                        let moving_j = !self.bots[j].waypoints.is_empty();
-                        let (weight_i, weight_j) = match (moving_i, moving_j) {
-                            (true, true) => (0.5, 0.5),
-                            (false, false) => (0.5, 0.5),
-                            (false, true) => (1.0, 0.0),
-                            (true, false) => (0.0, 1.0),
-                        };
-
-                        displacements.push((i, dir * (overlap * weight_i)));
-                        displacements.push((j, -dir * (overlap * weight_j)));
-                    }
-                }
-            }
-            for (i, d) in displacements {
-                self.bots[i].position += settings.collision_resolver_weight * d;
-            }
-
-            // for i in self.grid.iter_keys() {
-            //     let neighbors = self
-            //         .grid
-            //         .query(self.bots[i].position, self.bots[i].radius + 1.0);
-            //     for j in neighbors {
-            //         if i >= j {
-            //             continue;
-            //         }
-            //         let [a, b] = self.bots.get_disjoint_mut([i, j]).unwrap();
-            //
-            //         let d = a.position - b.position;
-            //         let dist_sq = d.length_squared();
-            //         let r_sum = a.radius + b.radius;
-            //
-            //         if dist_sq < r_sum.powi(2) {
-            //             let (dir, overlap) = if dist_sq > 0.00001 {
-            //                 let dist = dist_sq.sqrt();
-            //                 (d / dist, r_sum - dist)
-            //             } else {
-            //                 (vec2(1.0, 0.0), r_sum)
-            //             };
-            //
-            //             let moving_a = !a.waypoints.is_empty();
-            //             let moving_b = !b.waypoints.is_empty();
-            //             let (weight_a, weight_b) = match (moving_a, moving_b) {
-            //                 (true, true) => (0.5, 0.5),
-            //                 (false, false) => (0.5, 0.5),
-            //                 (false, true) => (1.0, 0.0),
-            //                 (true, false) => (0.0, 1.0),
-            //             };
-            //
-            //             a.position += dir * (overlap * weight_a);
-            //             b.position -= dir * (overlap * weight_b);
-            //         }
-            //     }
-            // }
-        }
-
-        for (_, bot) in &mut self.bots {
-            bot.position = self.tilemap.resolve_collisions(bot.position, bot.radius);
+            self.resolve_bot_bot_collisions(settings);
+            self.resolve_bot_wall_collisions();
         }
     }
 
@@ -202,7 +131,6 @@ impl World {
 
     fn apply_arrivals(&mut self, settings: &Settings) {
         let mut arrivals = vec![];
-        // for (i, bot) in &self.bots {
         for i in self.grid.iter_keys() {
             let bot = &self.bots[i];
             let Some(Task::Move(target)) = bot.tasks.first() else {
@@ -243,11 +171,44 @@ impl World {
         }
     }
 
-    fn compute_steering(&self, i: DefaultKey, settings: &Settings) -> Vec2 {
+    fn compute_orca_velocity(
+        &self,
+        i: DefaultKey,
+        settings: &Settings,
+        rng: &mut SmallRng,
+    ) -> Vec2 {
+        let target_vel = self.compute_target_velocity(i, settings, rng);
+        let bot = &self.bots[i];
+        let query_radius = 2.0 * bot.radius + 12.0 * settings.orca_time_horizon;
+        let neighbors: Vec<_> = self.grid.query(bot.position, query_radius).collect();
+        let lines = bot.generate_orca_lines(
+            &self.bots,
+            &neighbors,
+            settings.orca_time_horizon,
+            settings.timestep,
+        );
+        let goal = OptimizationGoal::MinimizeDistanceTo(target_vel);
+
+        match linear_program_2(&lines, bot.max_speed, goal) {
+            Ok(v) => v,
+            Err((failed_idx, last_good_vel)) => {
+                linear_program_3(&lines, failed_idx, bot.max_speed, last_good_vel)
+            }
+        }
+    }
+
+    fn compute_target_velocity(
+        &self,
+        i: DefaultKey,
+        settings: &Settings,
+        rng: &mut SmallRng,
+    ) -> Vec2 {
         let dt = settings.timestep;
         let bot = &self.bots[i];
 
-        if let Some(target) = bot.waypoints.last() {
+        let ideal_vel = if let Some(target) = bot.waypoints.last()
+            && *target != bot.position
+        {
             let offset = *target - bot.position;
             let d = offset.length();
             let dir = offset / d;
@@ -260,18 +221,71 @@ impl World {
                     let p_val = 0.5 * (1.0 + (8.0 * d) / a_dt_sq).sqrt();
                     let k = (p_val - 0.5).ceil().max(1.0);
                     let d_prev = (k * (k - 1.0) / 2.0) * a_dt_sq;
+
                     v_target_mag = (k - 1.0) * bot.max_accel * dt + (d - d_prev) / (k * dt);
                     if v_target_mag > bot.max_speed {
                         v_target_mag = bot.max_speed;
                     }
                 }
             }
-            let v_target = dir * v_target_mag;
-            let a_req = (v_target - bot.velocity) / dt;
-            a_req.clamp_length_max(bot.max_accel)
+
+            let noise_x = rng.gen_range(-0.001..=0.001);
+            let noise_y = rng.gen_range(-0.001..=0.001);
+            dir * v_target_mag + vec2(noise_x, noise_y)
         } else {
-            // friction force
-            (-bot.velocity / dt).clamp_length_max(bot.max_accel)
+            Vec2::ZERO
+        };
+
+        let dv = ideal_vel - bot.velocity;
+        bot.velocity + dv.clamp_length_max(bot.max_accel * dt)
+    }
+
+    fn resolve_bot_bot_collisions(&mut self, settings: &Settings) {
+        let mut displacements = Vec::new();
+        for i in self.bots.keys() {
+            let neighbors = self
+                .grid
+                .query(self.bots[i].position, self.bots[i].radius + 1.0);
+            for j in neighbors {
+                if i >= j {
+                    continue;
+                }
+
+                let d = self.bots[i].position - self.bots[j].position;
+                let dist_sq = d.length_squared();
+                let r_sum = self.bots[i].radius + self.bots[j].radius;
+
+                if dist_sq < r_sum.powi(2) {
+                    let (dir, overlap) = if dist_sq > 0.00001 {
+                        let dist = dist_sq.sqrt();
+                        (d / dist, r_sum - dist)
+                    } else {
+                        (vec2(1.0, 0.0), r_sum)
+                    };
+
+                    let moving_i = !self.bots[i].waypoints.is_empty();
+                    let moving_j = !self.bots[j].waypoints.is_empty();
+                    let (weight_i, weight_j) = match (moving_i, moving_j) {
+                        (true, true) => (0.5, 0.5),
+                        (false, false) => (0.5, 0.5),
+                        (false, true) => (1.0, 0.0),
+                        (true, false) => (0.0, 1.0),
+                    };
+
+                    displacements.push((i, dir * (overlap * weight_i)));
+                    displacements.push((j, -dir * (overlap * weight_j)));
+                }
+            }
+        }
+
+        for (i, d) in displacements {
+            self.bots[i].position += settings.collision_resolver_fraction * d;
+        }
+    }
+
+    fn resolve_bot_wall_collisions(&mut self) {
+        for (_, bot) in &mut self.bots {
+            bot.position = self.tilemap.resolve_collisions(bot.position, bot.radius);
         }
     }
 
