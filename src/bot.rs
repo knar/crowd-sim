@@ -1,5 +1,6 @@
 use crate::tilemap::TileMap;
 use nannou::glam::{IVec2, Vec2, ivec2, vec2};
+use slotmap::DefaultKey;
 use std::f32::consts::SQRT_2;
 
 #[derive(Debug)]
@@ -17,16 +18,18 @@ pub struct Bot {
     pub trail: [Vec2; 20],
     pub trail_idx: usize,
 
-    pub last_target: Option<Vec2>,
-
+    pub dir: Vec2,
+    pub debug_colliding: bool,
     pub debug_accel: Vec2,
-
     pub debug_arrival_dist: f32,
+    pub debug_task_ticks: usize,
+    pub debug_log: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Task {
     Move(Vec2),
+    Follow(DefaultKey),
 }
 
 impl Bot {
@@ -38,29 +41,37 @@ impl Bot {
             waypoints: Vec::new(),
             radius: 0.2,
             max_speed: 6.0,
-            max_accel: 120.0,
+            max_accel: 60.0,
             trail: [pos; 20],
             trail_idx: 0,
-            last_target: None,
+            dir: vec2(0.0, 1.0),
+            debug_colliding: false,
             debug_accel: Vec2::ZERO,
             debug_arrival_dist: 0.0,
+            debug_task_ticks: 0,
+            debug_log: String::new(),
         }
     }
 
     pub fn summary(&self) -> String {
-        if let Some(task) = self.tasks.first() {
+        let task_summary = if let Some(task) = self.tasks.first() {
             match task {
                 Task::Move(target) => format!(
-                    "Task: Move({:.2},{:.2}), dist: {:.2}\nvel mag: {:.2}",
+                    "Task: Move({:.2},{:.2}), dist: {:.2}\nvel mag: {:.2}, last tick delta pos: {:.2}, ticks: {}",
                     target.x,
                     target.y,
                     (*target - self.position).length(),
-                    self.velocity.length()
+                    self.velocity.length(),
+                    (self.position - self.prev_pos()).length(),
+                    self.debug_task_ticks,
                 ),
+                Task::Follow(k) => format!("Task: Follow({:?})", k),
             }
         } else {
-            format!("Task: None\nvel mag: {}", self.velocity.length())
-        }
+            format!("Task: None\nvel mag: {:.2}", self.velocity.length())
+        };
+
+        format!("{}\n{}", task_summary, self.debug_log)
     }
 
     pub fn prev_pos(&self) -> Vec2 {
@@ -75,6 +86,19 @@ impl Bot {
     pub fn log_position(&mut self) {
         self.trail_idx = (self.trail_idx + 1) % self.trail.len();
         self.trail[self.trail_idx] = self.position;
+    }
+
+    pub fn log_arrival(&mut self, dt: f32) {
+        let Some(Task::Move(target)) = self.tasks.first() else {
+            return;
+        };
+        self.debug_log.push_str(&format!(
+            "Arrived at ({:.2}, {:.2}), took {:.2}s\n",
+            target.x,
+            target.y,
+            self.debug_task_ticks as f32 * dt
+        ));
+        self.debug_task_ticks = 0;
     }
 }
 

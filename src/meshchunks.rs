@@ -8,7 +8,11 @@ use nannou::{
     math::Vec2Rotate,
 };
 
-use crate::{WALL_BORDER_COLOR, WALL_COLOR, axis_aligned_rect_rect_intersects, tilemap::TileMap};
+use crate::{
+    draw::{WALL_BORDER_COLOR, WALL_COLOR},
+    math::axis_aligned_rect_rect_intersects,
+    tilemap::TileMap,
+};
 
 #[derive(Debug)]
 pub struct MeshChunks {

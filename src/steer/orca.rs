@@ -1,7 +1,10 @@
-use nannou::glam::{Vec2, vec2};
+use nannou::{
+    glam::{Vec2, vec2},
+    rand::rngs::SmallRng,
+};
 use slotmap::{DefaultKey, SlotMap};
 
-use crate::bot::Bot;
+use crate::{Settings, bot::Bot, steer::basic::target_velocity, world::World};
 
 // ported from https://github.com/snape/RVO2/blob/main/src/Agent.cc
 
@@ -19,101 +22,121 @@ pub enum OptimizationGoal {
     MaximizeDirection(Vec2),
 }
 
-impl Bot {
-    pub fn generate_orca_lines(
-        &self,
-        bots: &SlotMap<DefaultKey, Bot>,
-        neighbors: &[DefaultKey],
-        tau: f32,
-        dt: f32,
-    ) -> Vec<Line> {
-        let mut lines = Vec::with_capacity(neighbors.len());
-        let inv_tau = 1.0 / tau;
-        let inv_dt = 1.0 / dt;
+pub fn orca_velocity(
+    world: &World,
+    k: DefaultKey,
+    settings: &Settings,
+    rng: &mut SmallRng,
+) -> Vec2 {
+    let target_vel = target_velocity(world, k, settings, rng);
+    let bot = &world.bots[k];
+    let query_radius = 2.0 * bot.radius + 12.0 * settings.orca_time_horizon;
+    let neighbors: Vec<_> = world.grid.query(bot.position, query_radius).collect();
+    let lines = orca_lines(
+        bot,
+        &world.bots,
+        &neighbors,
+        settings.orca_time_horizon,
+        settings.timestep,
+    );
+    let goal = OptimizationGoal::MinimizeDistanceTo(target_vel);
 
-        for k in neighbors {
-            let other = &bots[*k];
-            if self.position == other.position {
-                continue;
-            }
+    match linear_program_2(&lines, bot.max_speed, goal) {
+        Ok(v) => v,
+        Err((failed_idx, last_good_vel)) => {
+            linear_program_3(&lines, failed_idx, bot.max_speed, last_good_vel)
+        }
+    }
+}
 
-            let rel_pos = other.position - self.position;
-            let rel_vel = self.velocity - other.velocity;
-            let dist_sq = rel_pos.length_squared();
-            let r_sum = self.radius + other.radius;
-            let r_sum_sq = r_sum.powi(2);
+fn orca_lines(
+    bot: &Bot,
+    bots: &SlotMap<DefaultKey, Bot>,
+    neighbors: &[DefaultKey],
+    tau: f32,
+    dt: f32,
+) -> Vec<Line> {
+    let mut lines = Vec::with_capacity(neighbors.len());
+    let inv_tau = 1.0 / tau;
+    let inv_dt = 1.0 / dt;
 
-            let u: Vec2;
-            let mut line = Line::default();
+    for k in neighbors {
+        let other = &bots[*k];
+        if bot.position == other.position {
+            continue;
+        }
 
-            if dist_sq > r_sum_sq {
-                if self.velocity.length_squared() > 0.01 && other.velocity.length_squared() > 0.01 {
-                    if self.velocity.dot(rel_pos) < 0.0 {
-                        continue;
-                    }
-                    if self.velocity.normalize().dot(other.velocity.normalize()) > 0.94 {
-                        continue;
-                    }
-                }
+        let rel_pos = other.position - bot.position;
+        let rel_vel = bot.velocity - other.velocity;
+        let dist_sq = rel_pos.length_squared();
+        let r_sum = bot.radius + other.radius;
+        let r_sum_sq = r_sum.powi(2);
 
-                let w = rel_vel - inv_tau * rel_pos;
-                let w_len_sq = w.length_squared();
-                let dot_prod1 = w.dot(rel_pos);
+        let u: Vec2;
+        let mut line = Line::default();
 
-                if dot_prod1 < 0.0 && dot_prod1.powi(2) > r_sum_sq * w_len_sq {
-                    let w_len = w_len_sq.sqrt();
-                    let unit_w = if w_len > 0.0001 {
-                        w / w_len
-                    } else {
-                        vec2(1.0, 0.0)
-                    };
-                    line.dir = vec2(unit_w.y, -unit_w.x);
-                    u = (r_sum * inv_tau - w_len) * unit_w;
-                } else {
-                    let leg = (dist_sq - r_sum_sq).sqrt();
+        if dist_sq > r_sum_sq {
+            // if bot.velocity.length_squared() > 0.01 && other.velocity.length_squared() > 0.01 {
+            //     if bot.velocity.dot(rel_pos) < 0.0 {
+            //         continue;
+            //     }
+            //     if bot.velocity.normalize().dot(other.velocity.normalize()) > 0.94 {
+            //         continue;
+            //     }
+            // }
 
-                    if rel_pos.perp_dot(w) > 0.0 {
-                        line.dir = vec2(
-                            rel_pos.x * leg - rel_pos.y * r_sum,
-                            rel_pos.x * r_sum + rel_pos.y * leg,
-                        ) / dist_sq;
-                    } else {
-                        line.dir = -vec2(
-                            rel_pos.x * leg + rel_pos.y * r_sum,
-                            -rel_pos.x * r_sum + rel_pos.y * leg,
-                        ) / dist_sq;
-                    }
+            let w = rel_vel - inv_tau * rel_pos;
+            let w_len_sq = w.length_squared();
+            let dot_prod1 = w.dot(rel_pos);
 
-                    let dot_prod2 = rel_vel.dot(line.dir);
-                    u = dot_prod2 * line.dir - rel_vel;
-                }
-            } else {
-                let w = rel_vel - inv_dt * rel_pos;
-                let w_len = w.length();
+            if dot_prod1 < 0.0 && dot_prod1.powi(2) > r_sum_sq * w_len_sq {
+                let w_len = w_len_sq.sqrt();
                 let unit_w = if w_len > 0.0001 {
                     w / w_len
                 } else {
                     vec2(1.0, 0.0)
                 };
-
                 line.dir = vec2(unit_w.y, -unit_w.x);
-                u = (r_sum * inv_dt - w_len) * unit_w;
-            }
+                u = (r_sum * inv_tau - w_len) * unit_w;
+            } else {
+                let leg = (dist_sq - r_sum_sq).sqrt();
 
-            line.point = self.velocity + 0.5 * u;
-            lines.push(line);
+                if rel_pos.perp_dot(w) > 0.0 {
+                    line.dir = vec2(
+                        rel_pos.x * leg - rel_pos.y * r_sum,
+                        rel_pos.x * r_sum + rel_pos.y * leg,
+                    ) / dist_sq;
+                } else {
+                    line.dir = -vec2(
+                        rel_pos.x * leg + rel_pos.y * r_sum,
+                        -rel_pos.x * r_sum + rel_pos.y * leg,
+                    ) / dist_sq;
+                }
+
+                let dot_prod2 = rel_vel.dot(line.dir);
+                u = dot_prod2 * line.dir - rel_vel;
+            }
+        } else {
+            let w = rel_vel - inv_dt * rel_pos;
+            let w_len = w.length();
+            let unit_w = if w_len > 0.0001 {
+                w / w_len
+            } else {
+                vec2(1.0, 0.0)
+            };
+
+            line.dir = vec2(unit_w.y, -unit_w.x);
+            u = (r_sum * inv_dt - w_len) * unit_w;
         }
 
-        lines
+        line.point = bot.velocity + 0.5 * u;
+        lines.push(line);
     }
+
+    lines
 }
 
-pub fn linear_program_3(
-    lines: &[Line],
-    failed_idx: usize,
-    radius: f32,
-    last_good_vel: Vec2,
-) -> Vec2 {
+fn linear_program_3(lines: &[Line], failed_idx: usize, radius: f32, last_good_vel: Vec2) -> Vec2 {
     let mut opt_vel = last_good_vel;
     let mut dist = 0.0;
 
@@ -151,7 +174,7 @@ pub fn linear_program_3(
     opt_vel
 }
 
-pub fn linear_program_2(
+fn linear_program_2(
     lines: &[Line],
     radius: f32,
     goal: OptimizationGoal,

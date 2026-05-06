@@ -1,6 +1,6 @@
 use nannou::{
     glam::{IVec2, Vec2, ivec2, vec2},
-    rand::{Rng, rngs::SmallRng},
+    rand::rngs::SmallRng,
 };
 use pather::Pather;
 use slotmap::{DefaultKey, SlotMap};
@@ -8,9 +8,10 @@ use slotmap::{DefaultKey, SlotMap};
 use crate::{
     Settings,
     bot::{Bot, Task, massage_waypoints},
+    math::distance_to_segment_sq,
     meshchunks::MeshChunks,
-    orca::{OptimizationGoal, linear_program_2, linear_program_3},
     spatialgrid::SpatialGrid,
+    steer::{basic::target_velocity, orca::orca_velocity},
     tilemap::TileMap,
 };
 
@@ -21,7 +22,7 @@ pub struct World {
     repath_needed: bool,
     pub half_size: Vec2,
     pub mesh_chunks: MeshChunks,
-    grid: SpatialGrid,
+    pub grid: SpatialGrid,
 }
 
 impl World {
@@ -41,42 +42,51 @@ impl World {
     }
 
     pub fn tick(&mut self, settings: &Settings, rng: &mut SmallRng) {
-        for (_k, bot) in &mut self.bots {
-            bot.log_position();
-        }
-
         self.repath_bots();
         self.stringpull_waypoints();
 
         self.repop_spatial_grid();
         self.apply_arrivals(settings);
 
+        for (_k, bot) in &mut self.bots {
+            bot.log_position();
+            if !bot.tasks.is_empty() {
+                bot.debug_task_ticks += 1;
+            }
+            bot.debug_colliding = false;
+        }
+
+        let steering_strategy = if settings.use_orca {
+            orca_velocity
+        } else {
+            target_velocity
+        };
+
         let new_vels: Vec<_> = self
             .grid
             .iter_keys()
-            .map(|i| {
-                let vel = if settings.use_orca {
-                    self.compute_orca_velocity(i, settings, rng)
-                } else {
-                    self.compute_target_velocity(i, settings, rng)
-                };
-                (i, vel)
-            })
+            .map(|i| (i, steering_strategy(self, i, settings, rng)))
             .collect();
-
-        for (k, vel) in new_vels {
-            let bot = &mut self.bots[k];
-
-            bot.velocity = vel.clamp_length_max(bot.max_speed);
-            if bot.waypoints.is_empty() && bot.velocity.length_squared() < 0.001 {
-                bot.velocity = Vec2::ZERO;
-            }
-
-            bot.position += bot.velocity * settings.timestep;
-        }
 
         self.repop_spatial_grid();
         for _ in 0..settings.collision_resolver_iters {
+            for (k, vel) in &new_vels {
+                let bot = &mut self.bots[*k];
+
+                bot.velocity = vel.clamp_length_max(bot.max_speed);
+
+                if bot.waypoints.is_empty() && bot.velocity.length_squared() < 0.0001 {
+                    bot.velocity = Vec2::ZERO;
+                }
+
+                if let Some(dir) = bot.velocity.try_normalize() {
+                    bot.dir = dir;
+                }
+
+                bot.position +=
+                    bot.velocity * settings.timestep / settings.collision_resolver_iters as f32;
+            }
+
             self.resolve_bot_bot_collisions(settings);
             self.resolve_bot_wall_collisions();
         }
@@ -138,7 +148,7 @@ impl World {
                 continue;
             };
 
-            let dist_sq = bot.position.distance_squared(*target);
+            // let dist_sq = bot.position.distance_squared(*target);
 
             let n_overlapping = self
                 .grid
@@ -155,89 +165,21 @@ impl World {
                 settings.arrival_distance
             };
 
-            self.bots[i].debug_arrival_dist = arrival_distance;
-
-            if dist_sq < arrival_distance.powi(2) {
+            // if dist_sq < arrival_distance.powi(2) {
+            if distance_to_segment_sq(bot.prev_pos(), bot.position, *target)
+                < arrival_distance.powi(2)
+            {
                 arrivals.push(i);
             }
+
+            self.bots[i].debug_arrival_dist = arrival_distance;
         }
         for i in arrivals {
             let bot = &mut self.bots[i];
-            if let Some(Task::Move(target)) = bot.tasks.first() {
-                bot.last_target = Some(*target);
-            }
+            bot.log_arrival(settings.timestep);
             bot.tasks.remove(0);
             bot.waypoints.clear();
         }
-    }
-
-    fn compute_orca_velocity(
-        &self,
-        i: DefaultKey,
-        settings: &Settings,
-        rng: &mut SmallRng,
-    ) -> Vec2 {
-        let target_vel = self.compute_target_velocity(i, settings, rng);
-        let bot = &self.bots[i];
-        let query_radius = 2.0 * bot.radius + 12.0 * settings.orca_time_horizon;
-        let neighbors: Vec<_> = self.grid.query(bot.position, query_radius).collect();
-        let lines = bot.generate_orca_lines(
-            &self.bots,
-            &neighbors,
-            settings.orca_time_horizon,
-            settings.timestep,
-        );
-        let goal = OptimizationGoal::MinimizeDistanceTo(target_vel);
-
-        match linear_program_2(&lines, bot.max_speed, goal) {
-            Ok(v) => v,
-            Err((failed_idx, last_good_vel)) => {
-                linear_program_3(&lines, failed_idx, bot.max_speed, last_good_vel)
-            }
-        }
-    }
-
-    fn compute_target_velocity(
-        &self,
-        i: DefaultKey,
-        settings: &Settings,
-        rng: &mut SmallRng,
-    ) -> Vec2 {
-        let dt = settings.timestep;
-        let bot = &self.bots[i];
-
-        let ideal_vel = if let Some(target) = bot.waypoints.last()
-            && *target != bot.position
-        {
-            let offset = *target - bot.position;
-            let d = offset.length();
-            let dir = offset / d;
-            let mut v_target_mag = bot.max_speed;
-            if bot.tasks.len() <= 1 {
-                let braking_threshold =
-                    (bot.max_speed * bot.max_speed) / (2.0 * bot.max_accel) + (bot.max_speed * dt);
-                if d <= braking_threshold {
-                    let a_dt_sq = bot.max_accel * dt * dt;
-                    let p_val = 0.5 * (1.0 + (8.0 * d) / a_dt_sq).sqrt();
-                    let k = (p_val - 0.5).ceil().max(1.0);
-                    let d_prev = (k * (k - 1.0) / 2.0) * a_dt_sq;
-
-                    v_target_mag = (k - 1.0) * bot.max_accel * dt + (d - d_prev) / (k * dt);
-                    if v_target_mag > bot.max_speed {
-                        v_target_mag = bot.max_speed;
-                    }
-                }
-            }
-
-            let noise_x = rng.gen_range(-0.001..=0.001);
-            let noise_y = rng.gen_range(-0.001..=0.001);
-            dir * v_target_mag + vec2(noise_x, noise_y)
-        } else {
-            Vec2::ZERO
-        };
-
-        let dv = ideal_vel - bot.velocity;
-        bot.velocity + dv.clamp_length_max(bot.max_accel * dt)
     }
 
     fn resolve_bot_bot_collisions(&mut self, settings: &Settings) {
@@ -280,12 +222,17 @@ impl World {
 
         for (i, d) in displacements {
             self.bots[i].position += settings.collision_resolver_fraction * d;
+            self.bots[i].debug_colliding = true;
         }
     }
 
     fn resolve_bot_wall_collisions(&mut self) {
         for (_, bot) in &mut self.bots {
-            bot.position = self.tilemap.resolve_collisions(bot.position, bot.radius);
+            let new_pos = self.tilemap.resolve_collisions(bot.position, bot.radius);
+            if bot.position != new_pos {
+                bot.debug_colliding = true;
+                bot.position = new_pos;
+            }
         }
     }
 
@@ -298,12 +245,18 @@ impl World {
         }
     }
 
-    pub fn add_bot(&mut self, pos: Vec2, vel: Vec2, task: Option<Task>) {
-        self.bots.insert(Bot::new(pos, vel, task));
+    pub fn add_bot(&mut self, pos: Vec2, vel: Vec2, task: Option<Task>) -> DefaultKey {
+        self.bots.insert(Bot::new(pos, vel, task))
     }
 
-    pub fn delete_bot(&mut self, k: DefaultKey) {
-        self.bots.remove(k);
+    pub fn delete_bot(&mut self, k: DefaultKey) -> Option<Bot> {
+        for (_, bot) in self.bots.iter_mut() {
+            bot.tasks.retain(|task| match task {
+                Task::Move(_) => true,
+                Task::Follow(other) => *other != k,
+            })
+        }
+        self.bots.remove(k)
     }
 
     pub fn set_bot_task(&mut self, bot_key: DefaultKey, task: Task) {
@@ -312,5 +265,12 @@ impl World {
 
     pub fn add_bot_task(&mut self, bot_key: DefaultKey, task: Task) {
         self.bots[bot_key].tasks.push(task);
+    }
+
+    pub fn task_pos(&self, task: Task) -> Vec2 {
+        match task {
+            Task::Move(pos) => pos,
+            Task::Follow(k) => self.bots[k].position,
+        }
     }
 }
