@@ -3,7 +3,7 @@ use nannou::{
     rand::{Rng, SeedableRng, rngs::SmallRng},
 };
 
-use crate::{Model, bot::Task};
+use crate::{Model, world::bot::Task};
 
 pub fn scenario_simple_avoid(m: &mut Model) {
     m.reset_world();

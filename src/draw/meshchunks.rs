@@ -11,7 +11,7 @@ use nannou::{
 use crate::{
     draw::{WALL_BORDER_COLOR, WALL_COLOR},
     math::axis_aligned_rect_rect_intersects,
-    tilemap::TileMap,
+    world::tilemap::TileMap,
 };
 
 #[derive(Debug)]

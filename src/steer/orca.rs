@@ -4,7 +4,11 @@ use nannou::{
 };
 use slotmap::{DefaultKey, SlotMap};
 
-use crate::{Settings, bot::Bot, steer::basic::target_velocity, world::World};
+use crate::{
+    Settings,
+    steer::basic::target_velocity,
+    world::{World, bot::Bot},
+};
 
 // ported from https://github.com/snape/RVO2/blob/main/src/Agent.cc
 

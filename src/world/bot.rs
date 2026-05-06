@@ -1,7 +1,8 @@
-use crate::tilemap::TileMap;
 use nannou::glam::{IVec2, Vec2, ivec2, vec2};
 use slotmap::DefaultKey;
 use std::f32::consts::SQRT_2;
+
+use crate::world::tilemap::TileMap;
 
 #[derive(Debug)]
 pub struct Bot {

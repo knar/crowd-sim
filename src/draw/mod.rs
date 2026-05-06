@@ -1,3 +1,5 @@
+pub mod meshchunks;
+
 use std::sync::LazyLock;
 
 use nannou::{
@@ -6,7 +8,7 @@ use nannou::{
     glam::{Vec2, mat2, vec2, vec3},
 };
 
-use crate::{Model, bot::Task, math::lerp};
+use crate::{Model, Task, math::lerp};
 
 pub static BACKGROUND_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0x101010));
 pub static GROUND_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0x363652));

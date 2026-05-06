@@ -1,11 +1,7 @@
-mod bot;
 mod draw;
 mod math;
-mod meshchunks;
 mod scenarios;
-mod spatialgrid;
 mod steer;
-mod tilemap;
 mod world;
 
 use nannou::prelude::*;
@@ -18,11 +14,10 @@ use nannou_egui::{
 
 use slotmap::DefaultKey;
 
-use crate::bot::Task;
-use crate::draw::draw_world;
 use crate::math::{circle_rect_intersects, lerp};
 use crate::scenarios::*;
 use crate::world::World;
+use crate::{draw::draw_world, world::bot::Task};
 
 fn main() {
     nannou::app(model).event(event).run();

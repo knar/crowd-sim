@@ -1,3 +1,7 @@
+pub mod bot;
+mod spatialgrid;
+pub mod tilemap;
+
 use nannou::{
     glam::{IVec2, Vec2, ivec2, vec2},
     rand::rngs::SmallRng,
@@ -7,12 +11,14 @@ use slotmap::{DefaultKey, SlotMap};
 
 use crate::{
     Settings,
-    bot::{Bot, Task, massage_waypoints},
+    draw::meshchunks::MeshChunks,
     math::distance_to_segment_sq,
-    meshchunks::MeshChunks,
-    spatialgrid::SpatialGrid,
     steer::{basic::target_velocity, orca::orca_velocity},
-    tilemap::TileMap,
+    world::{
+        bot::{Bot, Task, massage_waypoints},
+        spatialgrid::SpatialGrid,
+        tilemap::TileMap,
+    },
 };
 
 pub struct World {
@@ -21,8 +27,8 @@ pub struct World {
     pather: Pather,
     repath_needed: bool,
     pub half_size: Vec2,
-    pub mesh_chunks: MeshChunks,
     pub grid: SpatialGrid,
+    pub mesh_chunks: MeshChunks,
 }
 
 impl World {
@@ -36,8 +42,8 @@ impl World {
             pather: Pather::new(math::ivec2(size.x, size.y)),
             repath_needed: true,
             half_size,
-            mesh_chunks,
             grid: SpatialGrid::new(size, 2.0, half_size),
+            mesh_chunks,
         }
     }
 
