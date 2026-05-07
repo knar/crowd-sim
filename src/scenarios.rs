@@ -17,6 +17,19 @@ pub fn scenario_simple_avoid(m: &mut Model) {
     m.client.selection = vec![k];
 }
 
+pub fn scenario_simple_group_line_collide(m: &mut Model, n: usize, d: f32) {
+    m.reset_world();
+
+    let r = 0.2;
+
+    for i in 0..n {
+        let pos = vec2(d / 2.0, i as f32 * (2.0 * r) - (n as f32 / 2.0 * r));
+        let pos2 = vec2(-pos.x, pos.y);
+        m.world.add_bot(pos, Vec2::ZERO, Some(Task::Move(pos2)));
+        m.world.add_bot(pos2, Vec2::ZERO, Some(Task::Move(pos)));
+    }
+}
+
 pub fn scenario_symmetry_avoid(m: &mut Model) {
     m.reset_world();
     let pos = vec2(-3.0, 0.0);

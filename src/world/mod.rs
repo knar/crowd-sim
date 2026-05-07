@@ -13,7 +13,6 @@ use crate::{
     Settings,
     draw::meshchunks::MeshChunks,
     math::distance_to_segment_sq,
-    steer::{basic::target_velocity, orca::orca_velocity},
     world::{
         bot::{Bot, Task, massage_waypoints},
         spatialgrid::SpatialGrid,
@@ -62,16 +61,13 @@ impl World {
             bot.debug_colliding = false;
         }
 
-        let steering_strategy = if settings.use_orca {
-            orca_velocity
-        } else {
-            target_velocity
-        };
-
         let new_vels: Vec<_> = self
             .grid
             .iter_keys()
-            .map(|i| (i, steering_strategy(self, i, settings, rng)))
+            .map(|i| {
+                let vel = settings.steering_strategy.steer_fn(self, i, settings, rng);
+                (i, vel)
+            })
             .collect();
 
         self.repop_spatial_grid();

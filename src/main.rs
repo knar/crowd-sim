@@ -9,15 +9,18 @@ use nannou::rand::SeedableRng;
 use nannou::rand::rngs::SmallRng;
 use nannou_egui::{
     Egui,
-    egui::{self, Slider},
+    egui::{self, ComboBox, Slider},
 };
 
 use slotmap::DefaultKey;
 
-use crate::math::{circle_rect_intersects, lerp};
 use crate::scenarios::*;
 use crate::world::World;
 use crate::{draw::draw_world, world::bot::Task};
+use crate::{
+    math::{circle_rect_intersects, lerp},
+    steer::SteeringStrategy,
+};
 
 fn main() {
     nannou::app(model).event(event).run();
@@ -74,8 +77,9 @@ impl Camera {
 
 struct Settings {
     timestep: f32,
-    use_orca: bool,
+    steering_strategy: SteeringStrategy,
     orca_time_horizon: f32,
+    ttc_time_horizon: f32,
     collision_resolver_iters: usize,
     collision_resolver_fraction: f32,
     arrival_distance: f32,
@@ -103,8 +107,9 @@ fn model(app: &App) -> Model {
 
     let settings = Settings {
         timestep: 0.02,
-        use_orca: false,
+        steering_strategy: SteeringStrategy::Basic,
         orca_time_horizon: 0.3,
+        ttc_time_horizon: 2.0,
         collision_resolver_iters: 1,
         collision_resolver_fraction: 1.0,
         arrival_distance: 0.01,
@@ -188,15 +193,51 @@ fn settings_window(model: &mut Model) {
                     ui.add(Slider::new(&mut model.settings.timestep, 0.01..=0.2));
                     ui.end_row();
 
-                    ui.label("Use ORCA");
-                    ui.checkbox(&mut model.settings.use_orca, "");
+                    ui.separator();
+                    ui.separator();
                     ui.end_row();
 
-                    ui.label("ORCA Time Horizon");
-                    ui.add(Slider::new(
-                        &mut model.settings.orca_time_horizon,
-                        0.1..=3.0,
-                    ));
+                    ui.label("Steering strategy");
+                    ComboBox::from_label("")
+                        .selected_text(format!("{}", model.settings.steering_strategy))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut model.settings.steering_strategy,
+                                SteeringStrategy::Basic,
+                                "Basic",
+                            );
+                            ui.selectable_value(
+                                &mut model.settings.steering_strategy,
+                                SteeringStrategy::Orca,
+                                "ORCA",
+                            );
+                            ui.selectable_value(
+                                &mut model.settings.steering_strategy,
+                                SteeringStrategy::Ttc,
+                                "TTC",
+                            );
+                        });
+                    ui.end_row();
+
+                    match model.settings.steering_strategy {
+                        SteeringStrategy::Basic => {}
+                        SteeringStrategy::Orca => {
+                            ui.label("ORCA Time Horizon");
+                            ui.add(Slider::new(
+                                &mut model.settings.orca_time_horizon,
+                                0.1..=3.0,
+                            ));
+                            ui.end_row();
+                        }
+                        SteeringStrategy::Ttc => {
+                            ui.label("TTC Time Horizon");
+                            ui.add(Slider::new(&mut model.settings.ttc_time_horizon, 0.1..=3.0));
+                            ui.end_row();
+                        }
+                    }
+
+                    ui.separator();
+                    ui.separator();
                     ui.end_row();
 
                     ui.label("Collision resolver iterations");
@@ -315,6 +356,8 @@ fn handle_sim_event(app: &App, model: &mut Model, event: WindowEvent) {
             Key::Key4 => scenario_origin_swap_n(model, 10, 5.0),
             Key::Key5 => scenario_origin_swap_n(model, 50, 10.0),
             Key::Key6 => scenario_lines_swap_n(model, 100),
+
+            Key::Key7 => scenario_simple_group_line_collide(model, 4, 10.0),
 
             _ => {}
         },
