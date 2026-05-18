@@ -8,7 +8,7 @@ use nannou::{
     glam::{Vec2, mat2, vec2, vec3},
 };
 
-use crate::{Model, Task, math::lerp};
+use crate::{DebugThing, Model, Task, math::lerp};
 
 pub static BACKGROUND_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0x101010));
 pub static GROUND_COLOR: LazyLock<Rgb<u8>> = LazyLock::new(|| rgb_u32(0x363652));
@@ -219,6 +219,63 @@ pub fn draw_world(app: &App, model: &Model, draw: &Draw) {
         }
     }
 
+    // debug things
+    if model.settings.draw_debug_lines {
+        for thing in &model.debug_things {
+            match *thing {
+                DebugThing::Vec(offset, v, clr) => {
+                    wdraw
+                        .line()
+                        .start(offset)
+                        .end(offset + v)
+                        .weight(0.04)
+                        .color(clr);
+                }
+                DebugThing::Circle(center, r, clr) => {
+                    wdraw
+                        .ellipse()
+                        .xy(center)
+                        .radius(r)
+                        .resolution(128.0)
+                        .stroke(clr)
+                        .stroke_weight(0.04)
+                        .no_fill();
+                }
+                DebugThing::Point(pos, clr) => {
+                    wdraw
+                        .ellipse()
+                        .xy(pos)
+                        .radius(0.06)
+                        .resolution(8.0)
+                        .color(clr);
+                }
+                DebugThing::Arc(origin, r, start, end, clr) => {
+                    let res = 20;
+                    let mut a = vec2(start.cos(), start.sin()) * r;
+                    for i in 1..=res {
+                        let theta = lerp(start, end, i as f32 / res as f32);
+                        let b = vec2(theta.cos(), theta.sin()) * r;
+                        wdraw
+                            .line()
+                            .start(origin + a)
+                            .end(origin + b)
+                            .weight(0.04)
+                            .color(clr);
+                        a = b;
+                    }
+                }
+                DebugThing::Text(ref s) => {
+                    draw.text(s)
+                        .color(WHITE)
+                        .font_size(12)
+                        .wh(app.main_window().rect().pad(4.0).wh())
+                        .align_text_middle_y()
+                        .align_text_bottom();
+                }
+            }
+        }
+    }
+
     // selection box
     if let (Some(start), Some(end)) = (model.client.drag_start, model.mouse_world_pos()) {
         wdraw
@@ -254,7 +311,7 @@ pub fn draw_world(app: &App, model: &Model, draw: &Draw) {
     }
 }
 
-fn draw_arrow(draw: &Draw, start: Vec2, end: Vec2, thickness: f32, color: Srgba<u8>) {
+pub fn draw_arrow(draw: &Draw, start: Vec2, end: Vec2, thickness: f32, color: Srgba<u8>) {
     draw.line()
         .start(start)
         .end(end)

@@ -32,6 +32,15 @@ struct Model {
     settings: Settings,
     world: World,
     rng: SmallRng,
+    debug_things: Vec<DebugThing>,
+}
+
+enum DebugThing {
+    Vec(Vec2, Vec2, Srgb<u8>),
+    Circle(Vec2, f32, Srgb<u8>),
+    Point(Vec2, Srgb<u8>),
+    Arc(Vec2, f32, f32, f32, Srgb<u8>),
+    Text(String),
 }
 
 impl Model {
@@ -47,7 +56,12 @@ impl Model {
     }
 
     fn tick(&mut self) {
-        self.world.tick(&self.settings, &mut self.rng);
+        self.world.tick(
+            &self.settings,
+            &mut self.rng,
+            &self.client.selection,
+            &mut self.debug_things,
+        );
     }
 }
 
@@ -78,8 +92,11 @@ impl Camera {
 struct Settings {
     timestep: f32,
     steering_strategy: SteeringStrategy,
+    target_vel_noise: bool,
     orca_time_horizon: f32,
     ttc_time_horizon: f32,
+    vo_neighbor_radius: f32,
+    vo_response: f32,
     collision_resolver_iters: usize,
     collision_resolver_fraction: f32,
     arrival_distance: f32,
@@ -107,15 +124,18 @@ fn model(app: &App) -> Model {
 
     let settings = Settings {
         timestep: 0.02,
-        steering_strategy: SteeringStrategy::Basic,
+        steering_strategy: SteeringStrategy::Vo,
+        target_vel_noise: true,
         orca_time_horizon: 0.3,
         ttc_time_horizon: 2.0,
+        vo_neighbor_radius: 3.0,
+        vo_response: 0.5,
         collision_resolver_iters: 1,
         collision_resolver_fraction: 1.0,
         arrival_distance: 0.01,
         timescale: 1.0,
         interpolate_frames: true,
-        draw_head_dot: true,
+        draw_head_dot: false,
         draw_debug_lines: true,
         draw_trail: false,
         paused: false,
@@ -128,7 +148,7 @@ fn model(app: &App) -> Model {
         drag_start: None,
         camera: Camera {
             position: Vec2::ZERO,
-            zoom: Vec2::splat(50.0),
+            zoom: Vec2::splat(100.0),
         },
         edit_walls_mode: false,
     };
@@ -139,6 +159,7 @@ fn model(app: &App) -> Model {
         client,
         world: World::new(world_size),
         rng: SmallRng::seed_from_u64(0),
+        debug_things: vec![],
     };
     model.reset_world();
 
@@ -216,7 +237,16 @@ fn settings_window(model: &mut Model) {
                                 SteeringStrategy::Ttc,
                                 "TTC",
                             );
+                            ui.selectable_value(
+                                &mut model.settings.steering_strategy,
+                                SteeringStrategy::Vo,
+                                "VO",
+                            );
                         });
+                    ui.end_row();
+
+                    ui.label("Target Velocity Noise");
+                    ui.checkbox(&mut model.settings.target_vel_noise, "");
                     ui.end_row();
 
                     match model.settings.steering_strategy {
@@ -232,6 +262,17 @@ fn settings_window(model: &mut Model) {
                         SteeringStrategy::Ttc => {
                             ui.label("TTC Time Horizon");
                             ui.add(Slider::new(&mut model.settings.ttc_time_horizon, 0.1..=3.0));
+                            ui.end_row();
+                        }
+                        SteeringStrategy::Vo => {
+                            ui.label("VO Neighbor Radius");
+                            ui.add(Slider::new(
+                                &mut model.settings.vo_neighbor_radius,
+                                0.1..=20.0,
+                            ));
+                            ui.end_row();
+                            ui.label("VO Response");
+                            ui.add(Slider::new(&mut model.settings.vo_response, 0.1..=1.0));
                             ui.end_row();
                         }
                     }
@@ -294,7 +335,12 @@ fn settings_window(model: &mut Model) {
                     ui.end_row();
 
                     if model.settings.paused && ui.button("Tick").clicked() {
-                        model.world.tick(&model.settings, &mut model.rng);
+                        model.world.tick(
+                            &model.settings,
+                            &mut model.rng,
+                            &model.client.selection,
+                            &mut model.debug_things,
+                        );
                         ui.end_row();
                     }
                 });
@@ -358,6 +404,7 @@ fn handle_sim_event(app: &App, model: &mut Model, event: WindowEvent) {
             Key::Key6 => scenario_lines_swap_n(model, 100),
 
             Key::Key7 => scenario_simple_group_line_collide(model, 4, 10.0),
+            Key::Key8 => scenario_circle_swap_n(model, 16, 5.0),
 
             _ => {}
         },

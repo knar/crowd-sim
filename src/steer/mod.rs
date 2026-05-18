@@ -1,6 +1,7 @@
 mod basic;
 mod orca;
 mod ttc;
+mod vo;
 
 use std::fmt::Display;
 
@@ -8,8 +9,8 @@ use nannou::{glam::Vec2, rand::rngs::SmallRng};
 use slotmap::DefaultKey;
 
 use crate::{
-    Settings,
-    steer::{basic::target_velocity, orca::orca_velocity, ttc::ttc_velocity},
+    DebugThing, Settings,
+    steer::{basic::target_velocity, orca::orca_velocity, ttc::ttc_velocity, vo::vo_velocity},
     world::World,
 };
 
@@ -18,6 +19,7 @@ pub enum SteeringStrategy {
     Basic,
     Orca,
     Ttc,
+    Vo,
 }
 
 impl SteeringStrategy {
@@ -27,11 +29,18 @@ impl SteeringStrategy {
         k: DefaultKey,
         settings: &Settings,
         rng: &mut SmallRng,
+        selection: &[DefaultKey],
+        debug_things: &mut Vec<DebugThing>,
     ) -> Vec2 {
         match self {
-            SteeringStrategy::Basic => target_velocity(world, k, settings, rng),
-            SteeringStrategy::Orca => orca_velocity(world, k, settings, rng),
-            SteeringStrategy::Ttc => ttc_velocity(world, k, settings, rng),
+            SteeringStrategy::Basic => {
+                target_velocity(world, k, settings, rng, selection, debug_things)
+            }
+            SteeringStrategy::Orca => {
+                orca_velocity(world, k, settings, rng, selection, debug_things)
+            }
+            SteeringStrategy::Ttc => ttc_velocity(world, k, settings, rng, selection, debug_things),
+            SteeringStrategy::Vo => vo_velocity(world, k, settings, rng, selection, debug_things),
         }
     }
 }
@@ -42,6 +51,7 @@ impl Display for SteeringStrategy {
             SteeringStrategy::Basic => write!(f, "Basic"),
             SteeringStrategy::Orca => write!(f, "ORCA"),
             SteeringStrategy::Ttc => write!(f, "TTC"),
+            SteeringStrategy::Vo => write!(f, "VO"),
         }
     }
 }

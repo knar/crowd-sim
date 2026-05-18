@@ -4,13 +4,15 @@ use nannou::{
 };
 use slotmap::DefaultKey;
 
-use crate::{Settings, world::World};
+use crate::{DebugThing, Settings, world::World};
 
 pub fn target_velocity(
     world: &World,
     k: DefaultKey,
     settings: &Settings,
     rng: &mut SmallRng,
+    _selection: &[DefaultKey],
+    _debug_things: &mut Vec<DebugThing>,
 ) -> Vec2 {
     let dt = settings.timestep;
     let bot = &world.bots[k];
@@ -38,9 +40,12 @@ pub fn target_velocity(
             }
         }
 
-        let noise_x = rng.gen_range(-0.001..=0.001);
-        let noise_y = rng.gen_range(-0.001..=0.001);
-        dir * v_target_mag + vec2(noise_x, noise_y)
+        if settings.target_vel_noise {
+            let noise_x = rng.gen_range(-0.001..=0.001);
+            let noise_y = rng.gen_range(-0.001..=0.001);
+            return dir * v_target_mag + vec2(noise_x, noise_y);
+        }
+        dir * v_target_mag
     } else {
         Vec2::ZERO
     };

@@ -5,7 +5,7 @@ use nannou::{
 use slotmap::{DefaultKey, SlotMap};
 
 use crate::{
-    Settings,
+    DebugThing, Settings,
     steer::basic::target_velocity,
     world::{World, bot::Bot},
 };
@@ -31,8 +31,10 @@ pub fn orca_velocity(
     k: DefaultKey,
     settings: &Settings,
     rng: &mut SmallRng,
+    selection: &[DefaultKey],
+    debug_things: &mut Vec<DebugThing>,
 ) -> Vec2 {
-    let target_vel = target_velocity(world, k, settings, rng);
+    let target_vel = target_velocity(world, k, settings, rng, selection, debug_things);
     let bot = &world.bots[k];
     let query_radius = 2.0 * bot.radius + 12.0 * settings.orca_time_horizon;
     let neighbors: Vec<_> = world.grid.query(bot.position, query_radius).collect();

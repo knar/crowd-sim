@@ -10,7 +10,7 @@ use pather::Pather;
 use slotmap::{DefaultKey, SlotMap};
 
 use crate::{
-    Settings,
+    DebugThing, Settings,
     draw::meshchunks::MeshChunks,
     math::distance_to_segment_sq,
     world::{
@@ -46,7 +46,15 @@ impl World {
         }
     }
 
-    pub fn tick(&mut self, settings: &Settings, rng: &mut SmallRng) {
+    pub fn tick(
+        &mut self,
+        settings: &Settings,
+        rng: &mut SmallRng,
+        selection: &[DefaultKey],
+        debug_things: &mut Vec<DebugThing>,
+    ) {
+        debug_things.clear();
+
         self.repath_bots();
         self.stringpull_waypoints();
 
@@ -65,7 +73,14 @@ impl World {
             .grid
             .iter_keys()
             .map(|i| {
-                let vel = settings.steering_strategy.steer_fn(self, i, settings, rng);
+                let vel = settings.steering_strategy.steer_fn(
+                    self,
+                    i,
+                    settings,
+                    rng,
+                    selection,
+                    debug_things,
+                );
                 (i, vel)
             })
             .collect();

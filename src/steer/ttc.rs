@@ -2,7 +2,7 @@ use nannou::{glam::Vec2, rand::rngs::SmallRng};
 use slotmap::{DefaultKey, SlotMap};
 
 use crate::{
-    Settings,
+    DebugThing, Settings,
     steer::basic::target_velocity,
     world::{World, bot::Bot},
 };
@@ -10,8 +10,15 @@ use crate::{
 // https://www.gameaipro.com/GameAIPro2/GameAIPro2_Chapter19_Guide_to_Anticipatory_Collision_Avoidance.pdf
 // pretty garb
 
-pub fn ttc_velocity(world: &World, i: DefaultKey, settings: &Settings, rng: &mut SmallRng) -> Vec2 {
-    let target_vel = target_velocity(world, i, settings, rng);
+pub fn ttc_velocity(
+    world: &World,
+    i: DefaultKey,
+    settings: &Settings,
+    rng: &mut SmallRng,
+    selection: &[DefaultKey],
+    debug_things: &mut Vec<DebugThing>,
+) -> Vec2 {
+    let target_vel = target_velocity(world, i, settings, rng, selection, debug_things);
     let bot = &world.bots[i];
 
     let mut f = 2.0 * (target_vel - bot.velocity);

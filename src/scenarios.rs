@@ -1,5 +1,8 @@
+use std::f32::consts::TAU;
+
 use nannou::{
     glam::{Vec2, vec2},
+    math::Vec2Rotate,
     rand::{Rng, SeedableRng, rngs::SmallRng},
 };
 
@@ -12,16 +15,13 @@ pub fn scenario_simple_avoid(m: &mut Model) {
         Vec2::ZERO,
         Some(Task::Move(vec2(3.0, 0.0))),
     );
-    m.world.add_bot(vec2(0.0, 0.2), Vec2::ZERO, None);
-
+    m.world.add_bot(vec2(0.0, 1.2), Vec2::ZERO, None);
     m.client.selection = vec![k];
 }
 
 pub fn scenario_simple_group_line_collide(m: &mut Model, n: usize, d: f32) {
     m.reset_world();
-
     let r = 0.2;
-
     for i in 0..n {
         let pos = vec2(d / 2.0, i as f32 * (2.0 * r) - (n as f32 / 2.0 * r));
         let pos2 = vec2(-pos.x, pos.y);
@@ -33,8 +33,11 @@ pub fn scenario_simple_group_line_collide(m: &mut Model, n: usize, d: f32) {
 pub fn scenario_symmetry_avoid(m: &mut Model) {
     m.reset_world();
     let pos = vec2(-3.0, 0.0);
-    m.world.add_bot(pos, Vec2::ZERO, Some(Task::Move(-pos)));
+    let k = m
+        .world
+        .add_bot(pos + vec2(0.0, 0.01), Vec2::ZERO, Some(Task::Move(-pos)));
     m.world.add_bot(-pos, Vec2::ZERO, Some(Task::Move(pos)));
+    m.client.selection = vec![k];
 }
 
 pub fn scenario_symmetry_avoid2(m: &mut Model) {
@@ -69,5 +72,13 @@ pub fn scenario_lines_swap_n(m: &mut Model, n: usize) {
             .add_bot(a, Vec2::ZERO, Some(Task::Move(vec2(-a.x, a.y))));
         m.world
             .add_bot(b, Vec2::ZERO, Some(Task::Move(vec2(-b.x, b.y))));
+    }
+}
+
+pub fn scenario_circle_swap_n(m: &mut Model, n: usize, r: f32) {
+    m.reset_world();
+    for i in 0..n {
+        let pos = vec2(r, 0.0).rotate(TAU * i as f32 / n as f32);
+        m.world.add_bot(pos, Vec2::ZERO, Some(Task::Move(-pos)));
     }
 }
